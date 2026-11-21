@@ -46,6 +46,14 @@
         </div>
       </div>
       <div class="field">
+        <span>플레이 방식</span>
+        <div class="seg">
+          <label><input type="radio" name="play" value="normal"><span>일반</span></label>
+          <label><input type="radio" name="play" value="wait"><span>연습 (기다리기)</span></label>
+        </div>
+        <small id="playHelp"></small>
+      </div>
+      <div class="field">
         <span>노트 속도 <b id="speedVal"></b></span>
         <input type="range" id="speed" min="1" max="8" step="0.5">
       </div>
@@ -71,7 +79,12 @@
         </select>
       </div>
       <label class="check"><input type="checkbox" id="longNotes"> 롱노트 (긴 음은 누르고 있기)</label>
-      <label class="check"><input type="checkbox" id="noFail"> 실패 없음 (연습 모드)</label>
+      <label class="check"><input type="checkbox" id="showScore"> 악보 표시</label>
+      <div class="field">
+        <span>악보 투명도 <b id="scoreOpacityVal"></b></span>
+        <input type="range" id="scoreOpacity" min="0.2" max="1" step="0.05">
+      </div>
+      <label class="check"><input type="checkbox" id="noFail"> 실패 없음</label>
       <label class="check"><input type="checkbox" id="autoplay"> 오토 플레이 (데모)</label>
 
       <h3>입력 테스트</h3>
@@ -122,6 +135,7 @@
 <script src="js/midi-file.js"></script>
 <script src="js/songs.js"></script>
 <script src="js/audio.js"></script>
+<script src="js/score.js"></script>
 <script src="js/input.js"></script>
 <script src="js/game.js"></script>
 <script src="js/main.js"></script>

@@ -17,6 +17,8 @@ window.MidiFile = (function () {
     if (div & 0x8000) throw new Error('SMPTE 타임코드 방식 MIDI는 지원하지 않습니다.');
 
     const tempos = [];
+    const timesigs = [];
+    let maxTick = 0;
     const rawTracks = [];
     let tracksRead = 0;
     while (tracksRead < ntrk && p + 8 <= d.byteLength) {
@@ -41,6 +43,8 @@ window.MidiFile = (function () {
           const l = vlq();
           if (type === 0x51 && l === 3) {
             tempos.push({ tick, mpq: (d.getUint8(p) << 16) | (d.getUint8(p + 1) << 8) | d.getUint8(p + 2) });
+          } else if (type === 0x58 && l >= 2) {
+            timesigs.push({ tick, num: d.getUint8(p), den: Math.pow(2, d.getUint8(p + 1)) });
           } else if (type === 0x03 && !name) {
             const bytes = new Uint8Array(buffer, p, l);
             try { name = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
@@ -65,6 +69,7 @@ window.MidiFile = (function () {
             if (st && st.length) {
               const s = st.shift();
               notes.push({ midi: a, ch, startTick: s.tick, endTick: tick, vel: s.vel });
+              maxTick = Math.max(maxTick, tick);
             }
           } else if (hi === 0xC0 && programs[ch] === undefined) {
             programs[ch] = a;
@@ -113,14 +118,26 @@ window.MidiFile = (function () {
       }
     });
 
+    // bar lines from time signatures (default 4/4)
+    timesigs.sort((a, b) => a.tick - b.tick);
+    if (!timesigs.length || timesigs[0].tick > 0) timesigs.unshift({ tick: 0, num: 4, den: 4 });
+    let bars = [];
+    for (let i = 0; i < timesigs.length; i++) {
+      const ts = timesigs[i];
+      const endTick = i + 1 < timesigs.length ? timesigs[i + 1].tick : maxTick + 1;
+      const step = Math.max(1, ts.num * div * 4 / ts.den);
+      for (let tk = ts.tick; tk < endTick; tk += step) bars.push(toSec(tk));
+    }
+
     // trim leading silence so the first note isn't far away
     let first = Infinity;
     for (const pt of parts) if (pt.notes.length) first = Math.min(first, pt.notes[0].time);
     if (first > 1 && first !== Infinity) {
       const shift = first - 1;
       for (const pt of parts) for (const n of pt.notes) n.time -= shift;
+      bars = bars.map(b => b - shift).filter(b => b >= -0.01);
     }
-    return { parts };
+    return { parts, bars, beatSec: tempos[0].mpq / 1e6 };
   }
 
   return { parse };

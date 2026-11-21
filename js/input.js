@@ -41,24 +41,51 @@ window.Input = (function () {
   }
 
   // ── computer keyboard ──
+  // 7-key mode
   const SEVEN = { KeyS: 60, KeyD: 62, KeyF: 64, Space: 65, KeyJ: 67, KeyK: 69, KeyL: 71 };
-  const PIANO = { KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyF: 5, KeyT: 6, KeyG: 7, KeyY: 8,
-                  KeyH: 9, KeyU: 10, KeyJ: 11, KeyK: 12, KeyO: 13, KeyL: 14, KeyP: 15, Semicolon: 16 };
-  const kb = { enabled: false, mode: 'seven', base: 60, min: 21, max: 108 };
+
+  // 88-key piano layout (A0–C8)
+  //  C2–C7 : white  1234567890qwertyuiopasdfghjklzxcvbnm   black (Shift)  !@$%^*(QWETYIOPSDGHJLZCVB
+  //  A0–B1 : Ctrl/Alt + 1234567890qwert  (chromatic)
+  //  C#7–C8: Ctrl/Alt + yuiopasdfghj     (chromatic)
+  const IS_BLACK = [0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0];
+  const SHIFT_DIGIT = { '!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6', '&': '7', '*': '8', '(': '9', ')': '0' };
+  const PIANO = {};   // 'M'(modifier) + 'S'(shift) + KeyboardEvent.code -> midi
+  const LABELS = {};  // midi -> { ch, mod }
+  function codeOf(ch) {
+    if (/[0-9]/.test(ch)) return { code: 'Digit' + ch, shift: false };
+    if (/[a-z]/.test(ch)) return { code: 'Key' + ch.toUpperCase(), shift: false };
+    if (/[A-Z]/.test(ch)) return { code: 'Key' + ch, shift: true };
+    return { code: 'Digit' + SHIFT_DIGIT[ch], shift: true };
+  }
+  function add(ch, midi, mod) {
+    const { code, shift } = codeOf(ch);
+    PIANO[(mod ? 'M' : '') + (shift ? 'S' : '') + code] = midi;
+    LABELS[midi] = { ch, mod };
+  }
+  {
+    const W = '1234567890qwertyuiopasdfghjklzxcvbnm', B = '!@$%^*(QWETYIOPSDGHJLZCVB';
+    let wi = 0, bi = 0;
+    for (let m = 36; m <= 96; m++) add(IS_BLACK[m % 12] ? B[bi++] : W[wi++], m, false);
+    '1234567890qwert'.split('').forEach((ch, i) => add(ch, 21 + i, true));
+    'yuiopasdfghj'.split('').forEach((ch, i) => add(ch, 97 + i, true));
+  }
+
+  const kb = { enabled: false, mode: 'seven' };
   const held = new Map(); // code -> midi
 
   addEventListener('keydown', (e) => {
-    if (!kb.enabled || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (kb.mode === 'piano' && (e.code === 'KeyZ' || e.code === 'KeyX')) {
-      const nb = kb.base + (e.code === 'KeyZ' ? -12 : 12);
-      if (nb >= kb.min - 12 && nb <= kb.max) kb.base = nb;
-      e.preventDefault();
-      return;
+    if (!kb.enabled || e.repeat || e.metaKey) return;
+    let midi;
+    if (kb.mode === 'seven') {
+      if (e.ctrlKey || e.altKey) return;
+      midi = SEVEN[e.code];
+    } else {
+      midi = PIANO[(e.ctrlKey || e.altKey ? 'M' : '') + (e.shiftKey ? 'S' : '') + e.code];
     }
-    const map = kb.mode === 'seven' ? SEVEN : PIANO;
-    if (!(e.code in map)) return;
+    if (midi === undefined) return;
     e.preventDefault();
-    const midi = kb.mode === 'seven' ? map[e.code] : kb.base + map[e.code];
+    if (held.has(e.code)) emit('off', held.get(e.code), 0, fixTs(e.timeStamp), 'key');
     held.set(e.code, midi);
     emit('on', midi, 0.75, fixTs(e.timeStamp), 'key');
   });
@@ -69,7 +96,7 @@ window.Input = (function () {
     emit('off', midi, 0, fixTs(e.timeStamp), 'key');
   });
   addEventListener('blur', () => {
-    for (const [code, midi] of held) emit('off', midi, 0, performance.now(), 'key');
+    for (const midi of held.values()) emit('off', midi, 0, performance.now(), 'key');
     held.clear();
   });
 
@@ -80,5 +107,6 @@ window.Input = (function () {
     state,
     keyboard: kb,
     SEVEN_KEYS: ['S', 'D', 'F', '␣', 'J', 'K', 'L'],
+    LABELS,
   };
 })();
