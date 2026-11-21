@@ -29,7 +29,9 @@ window.Game = (function () {
   const SOLFEGE = ['도', '레', '미', '파', '솔', '라', '시'];
   const LETTERS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
   const LONG_MIN = 0.8;   // seconds; longer notes become hold notes
-  const LEAD_IN = 2.5;    // seconds before t=0
+  const LEAD_IN = 3.5;    // seconds before t=0 (time to read the start guide)
+  const SOL12 = ['도', '도#', '레', '레#', '미', '파', '파#', '솔', '솔#', '라', '라#', '시'];
+  const SHIFT_SYM = { '!': '1', '@': '2', '$': '4', '%': '5', '^': '6', '*': '8', '(': '9' };
 
   // blue → purple → pink light across the keyboard
   const GLOW_STOPS = [[0, '#2d5bff'], [0.3, '#5a3dff'], [0.55, '#9b3cff'], [0.8, '#d93cd0'], [1, '#ff3d7f']];
@@ -176,6 +178,50 @@ window.Game = (function () {
       Input.keyboard.mode = this.mode;
       this.wisps = [];
       this.layout();
+
+      // start guide: where the first note is, plus a rotating tip
+      this.first = this.notes[0] || null;
+      this.tip = opts.tip || '';
+      this.hint = this.makeHint();
+      this.guideUntil = Math.max(0, (this.first ? this.first.time : 0) - 0.6);
+    }
+
+    // computer-keyboard name of a piano key, e.g. "T", "Shift+T", "Ctrl+1"
+    keyName(m) {
+      const L = Input.LABELS[m];
+      if (!L) return null;
+      let k = L.ch;
+      if (SHIFT_SYM[k]) k = 'Shift+' + SHIFT_SYM[k];
+      else if (/[A-Z]/.test(k)) k = 'Shift+' + k;
+      else k = k.toUpperCase();
+      return (L.mod ? 'Ctrl+' : '') + k;
+    }
+
+    makeHint() {
+      const n = this.first;
+      if (!n) return null;
+      const compact = this.opts.compact;
+      const spaceName = (k) => k === '␣' ? 'Space' : k;
+      if (this.mode === 'piano') {
+        const name = `${SOL12[n.midi % 12]} (${Songs.midiName(n.midi)})`;
+        const key = this.keyName(n.midi);
+        return {
+          main: compact || !key ? `첫 음: ${name} — 빛나는 건반을 누르세요` : `첫 음: ${name} — 키보드 ${key}`,
+          sub: compact ? '' : `기준: 가운데 도(C4) = 키보드 ${this.keyName(60)} · 흰건반 1~0, Q~M / 검은건반 Shift`,
+        };
+      }
+      const i = n.lane;
+      if (this.mode === 'seven') {
+        return { main: `첫 음: ${SOLFEGE[i]} — ${compact ? '빛나는 레인을 누르세요' : '키보드 ' + spaceName(Input.SEVEN_KEYS[i])}`,
+                 sub: compact ? '' : '도 레 미 파 솔 라 시 = S D F Space J K L' };
+      }
+      if (this.mode === 'drum') {
+        return { main: `첫 노트: ${DRUM_LANES[i].name} — ${compact ? '빛나는 레인을 누르세요' : '키보드 ' + spaceName(Input.SEVEN_KEYS[i])}`,
+                 sub: compact ? '' : '크래시 하이햇 스네어 킥 하이탐 로우탐 라이드 = S D F Space J K L' };
+      }
+      const keys = Input.LANE_KEYS[this.mode];
+      return { main: `첫 노트: ${i + 1}번 레인 — ${compact ? '빛나는 레인을 누르세요' : '키보드 ' + spaceName(keys[i])}`,
+               sub: compact ? '' : `레인 = ${keys.map(spaceName).join(' ')}` };
     }
 
     layout() {
@@ -526,6 +572,7 @@ window.Game = (function () {
 
     // ── render ──
     render(t) {
+      this.curT = t;
       const { g, W, H, fx, fw, judgeY } = this;
       const now = performance.now();
       g.fillStyle = '#07080f';
@@ -687,6 +734,13 @@ window.Game = (function () {
       g.restore();
     }
 
+    // pulsing highlight on the key / lane of the first note (until it is played)
+    firstPulse() {
+      const f = this.first;
+      if (!f || f.state !== 0 || this.curT > f.time + 0.2) return 0;
+      return 0.55 + 0.45 * Math.sin(performance.now() / 160);
+    }
+
     drawKeyboard() {
       const { g, judgeY, kbH } = this;
       const y0 = this.mode === 'piano' ? judgeY + 1 : judgeY + 6;
@@ -695,6 +749,12 @@ window.Game = (function () {
         for (let i = 0; i < this.laneCount; i++) {
           const r = this.rects.get(i), col = this.laneColor(i);
           const on = this.pressed.get(i)?.size > 0;
+          const fp = this.first && this.first.lane === i ? this.firstPulse() : 0;
+          if (fp) {
+            g.save(); g.shadowColor = col; g.shadowBlur = 24 * fp;
+            g.strokeStyle = rgba('#ffffff', fp); g.lineWidth = 4;
+            roundRect(g, r.x + 1, y0 - 2, r.w - 2, kbH + 4, 10); g.stroke(); g.restore();
+          }
           g.fillStyle = on ? col : this.due.has(i) ? rgba(col, 0.28) : '#161a2e';
           roundRect(g, r.x + 3, y0, r.w - 6, kbH, 8); g.fill();
           g.strokeStyle = rgba(col, 0.7); g.lineWidth = 2;
@@ -765,6 +825,27 @@ window.Game = (function () {
         g.fillRect(r.x + r.w * 0.15, y0 + blackH * 0.9, r.w * 0.7, 2);
         label(m, r.x + r.w / 2, y0 + blackH - 10, '#f2f2f6');
       }
+      const fp = this.firstPulse();
+      const fr = fp && this.rects.get(this.first.midi);
+      if (fr) {
+        const h = fr.black ? blackH : kh;
+        g.save();
+        g.fillStyle = rgba('#ffd166', 0.45 * fp);
+        g.fillRect(fr.x, y0, fr.w, h);
+        g.shadowColor = '#ffd166'; g.shadowBlur = 20 * fp;
+        g.strokeStyle = rgba('#ffd166', fp); g.lineWidth = 3;
+        g.strokeRect(fr.x + 1, y0 + 1, fr.w - 2, h - 2);
+        g.restore();
+        // key name bubble above the key
+        const key = this.opts.compact ? null : this.keyName(this.first.midi);
+        const txt = key ? `${SOL12[this.first.midi % 12]} · ${key}` : SOL12[this.first.midi % 12];
+        g.font = 'bold 14px "Malgun Gothic", sans-serif';
+        const tw = g.measureText(txt).width + 16, bx = Math.min(Math.max(fr.x + fr.w / 2 - tw / 2, 4), this.W - tw - 4);
+        g.fillStyle = 'rgba(20,16,4,0.9)'; roundRect(g, bx, judgeY - 40, tw, 26, 8); g.fill();
+        g.strokeStyle = '#ffd166'; g.lineWidth = 1.5; roundRect(g, bx, judgeY - 40, tw, 26, 8); g.stroke();
+        g.fillStyle = '#ffd166'; g.textAlign = 'center';
+        g.fillText(txt, bx + tw / 2, judgeY - 22);
+      }
     }
 
     drawEffects(now) {
@@ -833,11 +914,39 @@ window.Game = (function () {
         g.fillText('⏸ 빛나는 건반을 누르면 계속됩니다', cx, top + span * 0.78);
         g.globalAlpha = 1;
       }
+      let cardTop = null;
+      if (t < this.guideUntil && (this.hint || this.tip)) {
+        const a = Math.min(1, (this.guideUntil - t) / 0.5);
+        const lines = [];
+        if (this.hint) lines.push(['main', this.hint.main]);
+        if (this.hint && this.hint.sub) lines.push(['sub', this.hint.sub]);
+        if (this.tip) lines.push(['tip', '💡 ' + this.tip]);
+        const fonts = { main: 'bold 20px "Malgun Gothic", sans-serif', sub: '13px "Malgun Gothic", sans-serif', tip: '15px "Malgun Gothic", sans-serif' };
+        const colors = { main: '#ffd166', sub: '#aab0c8', tip: '#e8eaf4' };
+        let w = 0;
+        for (const [k, txt] of lines) { g.font = fonts[k]; w = Math.max(w, g.measureText(txt).width); }
+        w = Math.min(W - 24, w + 40);
+        const h = 22 + lines.length * 28, x = cx - w / 2;
+        const y = Math.max(top + 70, Math.min(yJudge + 50, judgeY - h - 56));  // stay clear of the key bubble
+        cardTop = y;
+        g.save();
+        g.globalAlpha = a;
+        g.fillStyle = 'rgba(10,12,26,0.85)'; roundRect(g, x, y, w, h, 12); g.fill();
+        g.strokeStyle = 'rgba(255,209,102,0.5)'; g.lineWidth = 1; roundRect(g, x, y, w, h, 12); g.stroke();
+        lines.forEach(([k, txt], i) => {
+          g.font = fonts[k]; g.fillStyle = colors[k];
+          g.fillText(txt, cx, y + 34 + i * 28, w - 20);
+        });
+        g.restore();
+      }
       if (t < 0) {
         g.fillStyle = '#e8eaf4'; g.font = 'bold 56px sans-serif';
-        g.fillText(Math.ceil(-t), cx, yJudge);
-        g.font = '18px "Malgun Gothic", sans-serif'; g.fillStyle = '#8b90a8';
-        g.fillText('준비', cx, yJudge + 34);
+        const cy = cardTop != null ? Math.min(yJudge, cardTop - 20) : yJudge;   // countdown sits above the guide card
+        g.fillText(Math.ceil(-t), cx, cy);
+        if (cardTop == null) {
+          g.font = '18px "Malgun Gothic", sans-serif'; g.fillStyle = '#8b90a8';
+          g.fillText('준비', cx, cy + 34);
+        }
       }
 
       if (this.combo >= 2) {

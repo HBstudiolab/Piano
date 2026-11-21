@@ -39,6 +39,59 @@
   const GM_INST = ['piano', 'pluck', 'organ', 'eguitar', 'bass', 'strings', 'strings', 'brass',
                    'brass', 'organ', 'lead', 'strings', 'lead', 'pluck', 'pluck', 'piano'];
 
+  // tips shown on the start screen — a different one every time (instead of a tutorial)
+  const TIPS = {
+    all: [
+      '노트가 빛나는 판정선에 닿는 순간에 치면 COOL이에요.',
+      '판정 범위: COOL ±45ms · GOOD ±90ms · BAD ±150ms.',
+      '타이밍이 계속 늦게 나오면 ⚙ 설정 → 판정 오프셋을 + 쪽으로 올려보세요.',
+      '⚙ 설정의 "연습 (기다리기)"를 켜면 칠 때까지 곡이 멈춰서 기다려요.',
+      '⚙ 설정에서 곡 재생 속도를 50~90%로 낮추면 천천히 연습할 수 있어요.',
+      '노트가 너무 빽빽해 보이면 ⚙ 설정에서 노트 속도를 올려보세요.',
+      '길게 이어진 롱노트는 끝날 때까지 누르고 있어야 해요.',
+      'MISS 없이 끝까지 치면 FULL COMBO, 전부 COOL이면 ALL COOL!',
+      '드럼 스타일을 바꾸면 같은 곡도 전혀 다른 분위기가 돼요.',
+      '어려우면 난이도를 이지로 낮춰보세요. 빠진 음은 자동 반주로 들려요.',
+    ],
+    allKeys: ['Esc로 일시정지, 일시정지 중 R은 처음부터, Q는 메뉴로 가요.'],
+    allTouch: ['화면 위쪽 가운데 ⏸ 버튼으로 일시정지할 수 있어요.', '여러 손가락으로 동시에 눌러도 돼요.'],
+    piano: [
+      '검은건반은 Shift를 누른 채 쳐요. 예: 도#(C#4) = Shift+T',
+      '파트 설정에서 오른손 · 왼손 · 양손을 고를 수 있어요.',
+      '노트가 떨어질 자리의 건반이 미리 은은하게 빛나요.',
+      '위쪽 악보에서 지금 나는 음이 주황색으로 표시돼요.',
+      'MIDI 피아노를 연결하면 진짜 피아노로 칠 수 있어요.',
+      '하드는 고른 손의 모든 음, 이지·노말은 화음 중 한 음만 쳐요.',
+    ],
+    bass: [
+      '베이스 라인은 곡의 뼈대예요. 드럼과 함께 리듬을 잡아줘요.',
+      '음이 높아지면 오른쪽 레인, 낮아지면 왼쪽 레인으로 떨어져요.',
+      '노트를 맞혀야 베이스 소리가 나요. 놓치면 그 음이 비어요.',
+      '베이스는 드럼 킥과 같이 움직이는 경우가 많아요. 킥 소리를 들어보세요.',
+    ],
+    guitar: [
+      '쉬운 곡에서 손을 풀고 전용곡에 도전해보세요.',
+      '음이 높아지면 오른쪽 레인, 낮아지면 왼쪽 레인으로 떨어져요.',
+      '노트를 맞혀야 기타 소리가 나요. 놓치면 멜로디가 비어요.',
+      '전용곡 "산왕의 궁전에서"는 갈수록 빨라져요. 끝까지 버텨보세요!',
+    ],
+    drum: [
+      '킥과 스네어만 정확히 맞춰도 리듬이 살아나요.',
+      'Space가 킥이에요. 엄지로 치면 편해요.',
+      '전자드럼(MIDI)은 연결만 하면 바로 칠 수 있어요.',
+      '피아노 건반으로도 드럼을 칠 수 있어요. 도~시가 각 레인이에요.',
+      '이지는 킥 · 스네어 · 크래시만, 하드는 고스트 노트까지 전부예요.',
+    ],
+  };
+  let lastTip = '';
+  function pickTip(which) {
+    const pool = [...TIPS.all, ...TIPS[which], ...(isTouch ? TIPS.allTouch : TIPS.allKeys)]
+      .filter(t => !(isTouch && /키보드|Shift|Space|Esc/.test(t)))     // phones have no keyboard
+      .filter(t => t !== lastTip);
+    lastTip = pool[Math.floor(Math.random() * pool.length)] || '';
+    return lastTip;
+  }
+
   const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
   let settings = { ...DEFAULTS };
   try {
@@ -487,7 +540,7 @@
     show('#game');
     await goLandscape();
     const mode = chart.inst === 'piano' ? settings.mode : chart.inst;
-    game.setup(chart, { ...settings, mode, compact: isTouch || innerWidth < 900, hitInst: chart.hitInst });
+    game.setup(chart, { ...settings, mode, compact: isTouch || innerWidth < 900, hitInst: chart.hitInst, tip: pickTip(chart.inst) });
     game.start();
   }
 
