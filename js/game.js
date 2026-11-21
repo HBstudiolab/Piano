@@ -10,6 +10,21 @@ window.Game = (function () {
   // 도 레 미 파 솔 라 시 colours
   const COLORS = ['#ff5a5f', '#ff9f43', '#ffd93d', '#4cd964', '#34c6f4', '#5b7cfa', '#b06cf5'];
   const PC_TO_WHITE = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6];
+  // drum mode: 7 lanes, GM drum notes -> lane
+  const DRUM_LANES = [
+    { name: '크래시', midi: 49, color: '#ffd93d' },
+    { name: '하이햇', midi: 42, color: '#34c6f4' },
+    { name: '스네어', midi: 38, color: '#ff5a5f' },
+    { name: '킥',     midi: 36, color: '#b06cf5' },
+    { name: '하이탐', midi: 48, color: '#ff9f43' },
+    { name: '로우탐', midi: 45, color: '#4cd964' },
+    { name: '라이드', midi: 51, color: '#5b7cfa' },
+  ];
+  // bass (4) / guitar (5) lanes use fret-button colours
+  const FRET = ['#4cd964', '#ff5a5f', '#ffd93d', '#34c6f4', '#ff9f43'];
+  const LANE_COUNT = { seven: 7, drum: 7, bass: 4, guitar: 5 };
+  const GM_TO_LANE = { 49: 0, 52: 0, 55: 0, 57: 0, 42: 1, 44: 1, 46: 1, 38: 2, 40: 2, 37: 2, 39: 2,
+                       35: 3, 36: 3, 48: 4, 50: 4, 47: 4, 45: 5, 43: 5, 41: 5, 51: 6, 53: 6, 59: 6 };
   const IS_BLACK = [0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0];
   const SOLFEGE = ['도', '레', '미', '파', '솔', '라', '시'];
   const LETTERS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
@@ -56,34 +71,60 @@ window.Game = (function () {
 
     resize() {
       const dpr = window.devicePixelRatio || 1;
-      this.W = innerWidth; this.H = innerHeight;
+      this.W = this.rot ? innerHeight : innerWidth;
+      this.H = this.rot ? innerWidth : innerHeight;
       this.cv.width = this.W * dpr; this.cv.height = this.H * dpr;
       this.cv.style.width = this.W + 'px'; this.cv.style.height = this.H + 'px';
       this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
       if (this.notes) this.layout();
     }
 
-    laneOf(midi) { return this.mode === 'seven' ? PC_TO_WHITE[midi % 12] : midi; }
+    laneOf(midi) {
+      return this.mode === 'piano' ? midi : this.mode === 'drum' ? GM_TO_LANE[midi] : PC_TO_WHITE[midi % 12];
+    }
+    // a piano keyboard (non-drum MIDI channel) can play drum mode: C D E F G A B -> lanes
+    inputLane(midi, ch, src) {
+      if (this.fret) {
+        if (midi >= 200) return midi - 200;                        // keyboard / touch lane codes
+        return Math.floor((midi % 12) * this.laneCount / 12);      // MIDI keyboard: octave split into N groups
+      }
+      if (this.mode === 'drum' && src === 'midi' && ch !== 9) return PC_TO_WHITE[midi % 12];
+      return this.laneOf(midi);
+    }
+    laneColor(i) { return this.mode === 'drum' ? DRUM_LANES[i].color : this.fret ? FRET[i] : COLORS[i]; }
 
     setup(chart, opts) {
       this.opts = opts;
       this.mode = opts.mode;
+      this.resize();
       this.title = chart.title;
       const rate = opts.rate || 1;
 
-      const play = chart.play.map(n => ({ time: n.time / rate, dur: n.dur / rate, midi: n.midi }))
+      this.laneCount = LANE_COUNT[this.mode] || 0;
+      this.fret = this.mode === 'bass' || this.mode === 'guitar';
+      const play = chart.play.map(n => ({ time: n.time / rate, dur: n.dur / rate, midi: n.midi, lane: n.lane }))
         .sort((a, b) => a.time - b.time || a.midi - b.midi);
 
       if (this.mode === 'piano') {
-        // full 88-key piano (A0–C8)
+        // full 88-key piano (A0–C8); on phones only the song's range so keys stay tappable
         this.lo = 21; this.hi = 108;
-        for (let i = play.length - 1; i >= 0; i--) if (play[i].midi < 21 || play[i].midi > 108) play.splice(i, 1);
+        if (opts.compact && play.length) {
+          let lo = 127, hi = 0;
+          for (const n of play) { lo = Math.min(lo, n.midi); hi = Math.max(hi, n.midi); }
+          lo -= lo % 12; hi = hi - (hi % 12) + 11;
+          while (hi - lo + 1 < 24) hi += 12;
+          this.lo = Math.max(21, lo); this.hi = Math.min(108, hi);
+        }
+        for (let i = play.length - 1; i >= 0; i--) if (play[i].midi < this.lo || play[i].midi > this.hi) play.splice(i, 1);
+      }
+      if (this.mode === 'drum') {
+        for (let i = play.length - 1; i >= 0; i--) if (GM_TO_LANE[play[i].midi] === undefined) play.splice(i, 1);
       }
 
       // per-lane queues: merge near-simultaneous duplicates, trim overlaps
       const byLane = new Map();
       for (const n of play) {
-        const L = this.laneOf(n.midi);
+        const L = n.lane ?? this.laneOf(n.midi);
         if (!byLane.has(L)) byLane.set(L, []);
         const arr = byLane.get(L);
         const prev = arr[arr.length - 1];
@@ -96,7 +137,7 @@ window.Game = (function () {
       this.totalUnits = 0;
       for (const [L, arr] of byLane) {
         for (const n of arr) {
-          n.long = !!opts.longNotes && n.dur >= LONG_MIN;
+          n.long = !!opts.longNotes && this.mode !== 'drum' && n.dur >= LONG_MIN;
           this.totalUnits += n.long ? 2 : 1;
           this.notes.push(n);
         }
@@ -140,12 +181,13 @@ window.Game = (function () {
     layout() {
       const { W, H } = this;
       this.rects = new Map();
-      if (this.mode === 'seven') {
-        this.fw = Math.min(560, W - 80);
+      if (this.mode !== 'piano') {
+        const N = this.laneCount;
+        const lw = Math.min(N <= 5 ? 100 : 80, (W - 80) / N);
+        this.fw = lw * N;
         this.kbH = 84;
         this.fx = (W - this.fw) / 2;
-        const lw = this.fw / 7;
-        for (let i = 0; i < 7; i++) this.rects.set(i, { x: this.fx + i * lw, w: lw, black: false });
+        for (let i = 0; i < N; i++) this.rects.set(i, { x: this.fx + i * lw, w: lw, black: false });
         this.headH = 16;
       } else {
         // full-width 88-key keyboard
@@ -209,6 +251,7 @@ window.Game = (function () {
 
     noteColor(midi) {
       if (this.mode === 'piano') return this.keyColor.get(midi) || '#8b3dff';
+      if (this.mode === 'drum') return DRUM_LANES[GM_TO_LANE[midi]]?.color || '#fff';
       return COLORS[PC_TO_WHITE[midi % 12]];
     }
 
@@ -298,18 +341,38 @@ window.Game = (function () {
       if (Sound.ctx && Sound.ctx.state === 'suspended') Sound.ctx.resume();
     }
 
+    // touch: which note is under (x, y)?
+    hitTest(x, y) {
+      if (this.mode !== 'piano') {
+        const i = Math.floor((x - this.fx) / (this.fw / this.laneCount));
+        if (i < 0 || i >= this.laneCount) return null;
+        if (this.fret) return { midi: 200 + i, ch: 15 };
+        return this.mode === 'drum' ? { midi: DRUM_LANES[i].midi, ch: 9 } : { midi: [60, 62, 64, 65, 67, 69, 71][i], ch: 0 };
+      }
+      const onKeys = y >= this.judgeY, blackBottom = this.judgeY + this.kbH * 0.6;
+      if (!onKeys || y <= blackBottom) {
+        for (const [m, r] of this.rects) if (r.black && x >= r.x && x < r.x + r.w) return { midi: m, ch: 0 };
+      }
+      for (const [m, r] of this.rects) if (!r.black && x >= r.x && x < r.x + r.w) return { midi: m, ch: 0 };
+      return null;
+    }
+
     // ── input ──
     keySoundOn(src) {
       const k = this.opts.keySound;
-      return k === 'on' || (k === 'auto' && src === 'key');
+      return k === 'on' || (k === 'auto' && src !== 'midi');
     }
 
-    noteOn(midi, vel, ts, src) {
+    noteOn(midi, vel, ts, src, ch = 0) {
       if (!this.running || this.paused) return;
-      if (this.keySoundOn(src)) Sound.noteOn(midi, vel);
+      const lane = this.inputLane(midi, ch, src);
+      if (this.keySoundOn(src) && !this.fret) {
+        if (this.mode === 'drum') {
+          if (lane !== undefined) Sound.playAt(ch === 9 || src !== 'midi' ? midi : DRUM_LANES[lane].midi, Sound.ctx.currentTime, 0.1, vel, null, 'drum');
+        } else Sound.noteOn(midi, vel);
+      }
       this.keysDown.add(midi);
-      const lane = this.laneOf(midi);
-      if (!this.rects.has(lane)) return;
+      if (lane === undefined || !this.rects.has(lane)) return;
       if (!this.pressed.has(lane)) this.pressed.set(lane, new Set());
       this.pressed.get(lane).add(midi);
       if (this.opts.autoplay) return;
@@ -322,11 +385,11 @@ window.Game = (function () {
       }
     }
 
-    noteOff(midi, ts, src) {
+    noteOff(midi, ts, src, ch = 0) {
       Sound.noteOff(midi);
       this.keysDown.delete(midi);
       if (!this.running) return;
-      const lane = this.laneOf(midi);
+      const lane = this.inputLane(midi, ch, src);
       const set = this.pressed.get(lane);
       if (!set) return;
       set.delete(midi);
@@ -349,6 +412,7 @@ window.Game = (function () {
         const res = auto ? 'COOL' : a <= WIN.COOL ? 'COOL' : a <= WIN.GOOD ? 'GOOD' : 'BAD';
         this.judge(res, d);
         this.effects.push({ lane, at: performance.now(), color: JUDGE[res].color });
+        if (this.opts.hitInst && !auto) Sound.playAt(n.midi, Sound.ctx.currentTime, Math.max(0.15, n.dur), 0.85, this.bus, this.opts.hitInst);
         if (n.long) { n.state = 1; this.holding.set(lane, n); }
         else n.state = 2;
         return;
@@ -420,7 +484,8 @@ window.Game = (function () {
             if (n.state !== 0) continue;
             const h = this.holding.get(lane);
             if (h) this.completeHold(lane, h);
-            Sound.playAt(n.midi, this.audioTime(n.time), n.dur, 0.75, this.bus);
+            Sound.playAt(n.midi, this.audioTime(n.time), n.dur, 0.75, this.bus,
+                         this.opts.hitInst || (this.mode === 'drum' ? 'drum' : 'piano'));
             this.press(lane, n.time, true);
           }
         }
@@ -500,13 +565,13 @@ window.Game = (function () {
 
     drawLanes() {
       const { g, judgeY } = this;
-      if (this.mode === 'seven') {
-        for (let i = 0; i < 7; i++) {
+      if (this.mode !== 'piano') {
+        for (let i = 0; i < this.laneCount; i++) {
           const r = this.rects.get(i);
           if (i % 2) { g.fillStyle = 'rgba(255,255,255,0.025)'; g.fillRect(r.x, 0, r.w, judgeY); }
           g.fillStyle = 'rgba(255,255,255,0.07)';
           g.fillRect(r.x, 0, 1, judgeY);
-          if (this.pressed.get(i)?.size) this.beam(r, COLORS[i]);
+          if (this.pressed.get(i)?.size) this.beam(r, this.laneColor(i));
         }
         g.fillRect(this.fx + this.fw - 1, 0, 1, judgeY);
       } else {
@@ -534,7 +599,7 @@ window.Game = (function () {
       const { g, judgeY, headH } = this;
       const r = this.rects.get(n.lane);
       if (!r) return;
-      const col = this.mode === 'seven' ? COLORS[n.lane] : this.noteColor(n.midi);
+      const col = this.mode !== 'piano' ? this.laneColor(n.lane) : this.noteColor(n.midi);
       let yHead = judgeY - (n.time - t) * pps;
       if (n.state === 1) yHead = judgeY;
       if (yHead - headH > this.H) return;
@@ -625,21 +690,29 @@ window.Game = (function () {
     drawKeyboard() {
       const { g, judgeY, kbH } = this;
       const y0 = this.mode === 'piano' ? judgeY + 1 : judgeY + 6;
-      if (this.mode === 'seven') {
-        for (let i = 0; i < 7; i++) {
-          const r = this.rects.get(i);
+      if (this.mode !== 'piano') {
+        const drum = this.mode === 'drum';
+        for (let i = 0; i < this.laneCount; i++) {
+          const r = this.rects.get(i), col = this.laneColor(i);
           const on = this.pressed.get(i)?.size > 0;
-          g.fillStyle = on ? COLORS[i] : this.due.has(i) ? rgba(COLORS[i], 0.28) : '#161a2e';
+          g.fillStyle = on ? col : this.due.has(i) ? rgba(col, 0.28) : '#161a2e';
           roundRect(g, r.x + 3, y0, r.w - 6, kbH, 8); g.fill();
-          g.strokeStyle = rgba(COLORS[i], 0.7); g.lineWidth = 2;
+          g.strokeStyle = rgba(col, 0.7); g.lineWidth = 2;
           roundRect(g, r.x + 3, y0, r.w - 6, kbH, 8); g.stroke();
           g.textAlign = 'center';
           g.fillStyle = on ? '#0b0d18' : '#e8eaf4';
-          g.font = 'bold 22px "Malgun Gothic", sans-serif';
-          g.fillText(SOLFEGE[i], r.x + r.w / 2, y0 + 34);
+          if (this.fret) {                                         // round fret button
+            g.beginPath(); g.arc(r.x + r.w / 2, y0 + 32, Math.min(22, r.w * 0.28), 0, Math.PI * 2);
+            g.fillStyle = on ? '#fff' : col; g.globalAlpha = on ? 1 : 0.85; g.fill(); g.globalAlpha = 1;
+            g.font = 'bold 13px sans-serif'; g.fillStyle = on ? '#0b0d18' : '#8b90a8';
+            if (!this.opts.compact) g.fillText(Input.LANE_KEYS[this.mode][i], r.x + r.w / 2, y0 + 72);
+            continue;
+          }
+          g.font = `bold ${drum ? Math.min(18, r.w * 0.24) : 22}px "Malgun Gothic", sans-serif`;
+          g.fillText(drum ? DRUM_LANES[i].name : SOLFEGE[i], r.x + r.w / 2, y0 + 34);
           g.font = '12px sans-serif';
           g.fillStyle = on ? '#0b0d18' : '#8b90a8';
-          g.fillText(`${LETTERS[i]} · ${Input.SEVEN_KEYS[i]}`, r.x + r.w / 2, y0 + 58);
+          g.fillText(this.opts.compact ? (drum ? '' : LETTERS[i]) : drum ? Input.SEVEN_KEYS[i] : `${LETTERS[i]} · ${Input.SEVEN_KEYS[i]}`, r.x + r.w / 2, y0 + 58);
         }
         return;
       }
@@ -650,6 +723,10 @@ window.Game = (function () {
       g.textAlign = 'center';
       g.font = `bold ${fs}px Consolas, "Malgun Gothic", monospace`;
       const label = (m, cx, y, color) => {
+        if (this.opts.compact) {
+          if (m % 12 === 0) { g.fillStyle = color; g.fillText('C' + (m / 12 - 1), cx, y); }
+          return;
+        }
         const L = Input.LABELS[m];
         if (!L) return;
         g.fillStyle = color;
@@ -723,8 +800,9 @@ window.Game = (function () {
       g.fillText(this.title, 20, 36);
       g.fillStyle = '#8b90a8'; g.font = '13px "Malgun Gothic", sans-serif';
       const rateTxt = this.opts.rate !== 1 ? ` · ${Math.round(this.opts.rate * 100)}%` : '';
-      g.fillText((this.mode === 'seven' ? '7키 모드' : '피아노 모드') + (this.wait ? ' · 연습(기다리기)' : '') + rateTxt + (this.opts.autoplay ? ' · AUTO' : ''), 20, 58);
-      if (this.mode === 'seven') g.fillText('Esc: 일시정지', 20, this.H - 16);
+      g.fillText(({ seven: '피아노 7키', piano: '피아노', drum: '드럼', bass: '베이스', guitar: '일렉기타' })[this.mode] + (this.wait ? ' · 연습(기다리기)' : '') + rateTxt + (this.opts.autoplay ? ' · AUTO' : ''), 20, 58);
+      if (this.opts.compact) {}
+      else if (this.mode !== 'piano') g.fillText('Esc: 일시정지', 20, this.H - 16);
       else g.fillText('Esc: 일시정지', 20, 78);
 
       g.textAlign = 'right';
@@ -736,7 +814,7 @@ window.Game = (function () {
 
       // HP gauge
       const hpCol = this.hp > 50 ? '#4cd964' : this.hp > 25 ? '#ffcf5a' : '#ff5f6d';
-      if (this.mode === 'seven') {
+      if (this.mode !== 'piano') {
         const hx = fx + fw + 14, hh = judgeY * 0.55, hy = judgeY - hh;
         g.fillStyle = '#1a1e33'; g.fillRect(hx, hy, 8, hh);
         g.fillStyle = hpCol;
@@ -803,5 +881,7 @@ window.Game = (function () {
     g.closePath();
   }
 
+  Game.GM_TO_LANE = GM_TO_LANE;
+  Game.DRUM_LANES = DRUM_LANES;
   return Game;
 })();

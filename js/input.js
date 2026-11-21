@@ -15,8 +15,9 @@ window.Input = (function () {
     const [st, d1, d2] = e.data;
     const cmd = st & 0xF0;
     const ts = fixTs(e.timeStamp);
-    if (cmd === 0x90 && d2 > 0) emit('on', d1, d2 / 127, ts, 'midi');
-    else if (cmd === 0x80 || (cmd === 0x90 && d2 === 0)) emit('off', d1, 0, ts, 'midi');
+    const ch = st & 0x0F;
+    if (cmd === 0x90 && d2 > 0) emit('on', d1, d2 / 127, ts, 'midi', ch);
+    else if (cmd === 0x80 || (cmd === 0x90 && d2 === 0)) emit('off', d1, 0, ts, 'midi', ch);
   }
 
   function bind(access) {
@@ -43,6 +44,12 @@ window.Input = (function () {
   // ── computer keyboard ──
   // 7-key mode
   const SEVEN = { KeyS: 60, KeyD: 62, KeyF: 64, Space: 65, KeyJ: 67, KeyK: 69, KeyL: 71 };
+  // drum mode: crash, hi-hat, snare, kick, high tom, low tom, ride (GM drum notes, channel 10)
+  const DRUM = { KeyS: 49, KeyD: 42, KeyF: 38, Space: 36, KeyJ: 48, KeyK: 45, KeyL: 51 };
+  // bass / guitar: lane codes 200 + lane (the game plays the chart note's own sound)
+  const BASS = { KeyD: 200, KeyF: 201, KeyJ: 202, KeyK: 203 };
+  const GUITAR = { KeyD: 200, KeyF: 201, Space: 202, KeyJ: 203, KeyK: 204 };
+  const LANE_MAPS = { seven: SEVEN, drum: DRUM, bass: BASS, guitar: GUITAR };
 
   // 88-key piano layout (A0–C8)
   //  C2–C7 : white  1234567890qwertyuiopasdfghjklzxcvbnm   black (Shift)  !@$%^*(QWETYIOPSDGHJLZCVB
@@ -77,23 +84,24 @@ window.Input = (function () {
   addEventListener('keydown', (e) => {
     if (!kb.enabled || e.repeat || e.metaKey) return;
     let midi;
-    if (kb.mode === 'seven') {
+    if (LANE_MAPS[kb.mode]) {
       if (e.ctrlKey || e.altKey) return;
-      midi = SEVEN[e.code];
+      midi = LANE_MAPS[kb.mode][e.code];
     } else {
       midi = PIANO[(e.ctrlKey || e.altKey ? 'M' : '') + (e.shiftKey ? 'S' : '') + e.code];
     }
     if (midi === undefined) return;
     e.preventDefault();
-    if (held.has(e.code)) emit('off', held.get(e.code), 0, fixTs(e.timeStamp), 'key');
+    const ch = kb.mode === 'drum' ? 9 : 0;
+    if (held.has(e.code)) emit('off', held.get(e.code), 0, fixTs(e.timeStamp), 'key', ch);
     held.set(e.code, midi);
-    emit('on', midi, 0.75, fixTs(e.timeStamp), 'key');
+    emit('on', midi, 0.75, fixTs(e.timeStamp), 'key', ch);
   });
   addEventListener('keyup', (e) => {
     if (!held.has(e.code)) return;
     const midi = held.get(e.code);
     held.delete(e.code);
-    emit('off', midi, 0, fixTs(e.timeStamp), 'key');
+    emit('off', midi, 0, fixTs(e.timeStamp), 'key', kb.mode === 'drum' ? 9 : 0);
   });
   addEventListener('blur', () => {
     for (const midi of held.values()) emit('off', midi, 0, performance.now(), 'key');
@@ -107,6 +115,7 @@ window.Input = (function () {
     state,
     keyboard: kb,
     SEVEN_KEYS: ['S', 'D', 'F', '␣', 'J', 'K', 'L'],
+    LANE_KEYS: { bass: ['D', 'F', 'J', 'K'], guitar: ['D', 'F', '␣', 'J', 'K'] },
     LABELS,
   };
 })();

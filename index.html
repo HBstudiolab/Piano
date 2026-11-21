@@ -2,8 +2,10 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Keyfall — MIDI 피아노 리듬게임</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Keyfall — 악기 리듬게임</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -13,90 +15,131 @@
   <header class="top">
     <div>
       <h1>KEYFALL</h1>
-      <p class="sub">MIDI 피아노로 치는 리듬게임</p>
+      <p class="sub">악기로 치는 리듬게임</p>
     </div>
-    <div id="midiStatus" class="pill">MIDI 확인 중…</div>
+    <div class="top-right">
+      <div id="midiStatus" class="pill">MIDI 확인 중…</div>
+      <button id="settingsBtn" class="icon-btn">⚙ 설정</button>
+    </div>
   </header>
 
-  <main class="grid">
-    <section class="panel">
+  <!-- instrument tabs -->
+  <nav class="tabs" id="tabs" role="tablist">
+    <button class="tab" data-inst="piano" role="tab"><span>🎹</span> 피아노</button>
+    <button class="tab" data-inst="bass" role="tab"><span>🎸</span> 베이스</button>
+    <button class="tab" data-inst="guitar" role="tab"><span>⚡</span> 일렉기타</button>
+    <button class="tab" data-inst="drum" role="tab"><span>🥁</span> 드럼</button>
+  </nav>
+
+  <main class="tab-body">
+    <section class="panel songs-panel">
       <h2>곡 선택</h2>
       <ul id="songList" class="song-list"></ul>
+      <p id="libNote" class="help"></p>
       <label id="dropZone" class="drop">
         <input type="file" id="midiFile" accept=".mid,.midi" hidden>
         <strong>MIDI 파일 불러오기</strong>
-        <span>.mid 파일을 여기에 끌어다 놓거나 클릭</span>
+        <span>.mid 파일을 끌어다 놓거나 클릭</span>
       </label>
     </section>
 
-    <section class="panel">
+    <section class="panel detail-panel">
+      <p id="instLabel" class="inst-label"></p>
       <h2 id="songTitle">곡을 선택하세요</h2>
       <div id="songMeta" class="meta"></div>
-      <div id="partList" class="parts"></div>
-      <button id="startBtn" class="primary" disabled>시작 <kbd>Enter</kbd></button>
-    </section>
-
-    <section class="panel">
-      <h2>설정</h2>
-      <div class="field">
-        <span>모드</span>
-        <div class="seg">
-          <label><input type="radio" name="mode" value="seven"><span>7키 (도~시)</span></label>
-          <label><input type="radio" name="mode" value="piano"><span>피아노 건반</span></label>
+      <div id="drumStyleRow"></div>
+      <div id="handPick" class="diff-pick">
+        <span>파트 설정</span>
+        <div class="seg hands">
+          <label><input type="radio" name="hands" value="R"><span>오른손</span></label>
+          <label><input type="radio" name="hands" value="L"><span>왼손</span></label>
+          <label><input type="radio" name="hands" value="both"><span>양손</span></label>
         </div>
+        <small id="handHelp"></small>
       </div>
-      <div class="field">
-        <span>플레이 방식</span>
-        <div class="seg">
-          <label><input type="radio" name="play" value="normal"><span>일반</span></label>
-          <label><input type="radio" name="play" value="wait"><span>연습 (기다리기)</span></label>
+      <div class="diff-pick">
+        <span>난이도</span>
+        <div class="seg diff">
+          <label><input type="radio" name="diff" value="easy"><span>이지</span></label>
+          <label><input type="radio" name="diff" value="normal"><span>노말</span></label>
+          <label><input type="radio" name="diff" value="hard"><span>하드</span></label>
         </div>
-        <small id="playHelp"></small>
+        <small id="diffHelp"></small>
       </div>
-      <div class="field">
-        <span>노트 속도 <b id="speedVal"></b></span>
-        <input type="range" id="speed" min="1" max="8" step="0.5">
-      </div>
-      <div class="field">
-        <span>곡 재생 속도 (연습용)</span>
-        <select id="rate">
-          <option value="0.5">50%</option><option value="0.6">60%</option>
-          <option value="0.7">70%</option><option value="0.8">80%</option>
-          <option value="0.9">90%</option><option value="1">100%</option>
-        </select>
-      </div>
-      <div class="field">
-        <span>판정 오프셋 <b id="offsetVal"></b></span>
-        <input type="range" id="offset" min="-150" max="150" step="5">
-        <small>+ 값: 늦게 쳐도 정확하게 판정 (입력 지연 보정)</small>
-      </div>
-      <div class="field">
-        <span>건반 소리 (게임에서 재생)</span>
-        <select id="keySound">
-          <option value="auto">자동 (컴퓨터 키보드만)</option>
-          <option value="on">항상 켜기</option>
-          <option value="off">끄기</option>
-        </select>
-      </div>
-      <label class="check"><input type="checkbox" id="longNotes"> 롱노트 (긴 음은 누르고 있기)</label>
-      <label class="check"><input type="checkbox" id="showScore"> 악보 표시</label>
-      <div class="field">
-        <span>악보 투명도 <b id="scoreOpacityVal"></b></span>
-        <input type="range" id="scoreOpacity" min="0.2" max="1" step="0.05">
-      </div>
-      <label class="check"><input type="checkbox" id="noFail"> 실패 없음</label>
-      <label class="check"><input type="checkbox" id="autoplay"> 오토 플레이 (데모)</label>
-
-      <h3>입력 테스트</h3>
-      <div id="inputTest" class="input-test">건반을 눌러보세요</div>
-      <p class="help" id="keyHelp"></p>
+      <button id="startBtn" class="primary" disabled>▶ 시작 <kbd>Enter</kbd></button>
+      <p id="songCredit" class="credit"></p>
     </section>
   </main>
+</div>
+
+<!-- ───────── 설정 (숨김) ───────── -->
+<div id="settingsModal" class="overlay hidden">
+  <div class="card settings-card">
+    <div class="settings-head"><h2>설정</h2><button id="closeSettings" class="icon-btn">✕</button></div>
+    <div class="settings-grid">
+      <div>
+        <div class="field">
+          <span>피아노 건반 보기</span>
+          <div class="seg">
+            <label><input type="radio" name="mode" value="piano"><span>88건반</span></label>
+            <label><input type="radio" name="mode" value="seven"><span>7키 (도~시)</span></label>
+          </div>
+        </div>
+        <div class="field">
+          <span>플레이 방식</span>
+          <div class="seg">
+            <label><input type="radio" name="play" value="normal"><span>일반</span></label>
+            <label><input type="radio" name="play" value="wait"><span>연습 (기다리기)</span></label>
+          </div>
+          <small id="playHelp"></small>
+        </div>
+        <div class="field">
+          <span>노트 속도 <b id="speedVal"></b></span>
+          <input type="range" id="speed" min="1" max="8" step="0.5">
+        </div>
+        <div class="field">
+          <span>곡 재생 속도 (연습용)</span>
+          <select id="rate">
+            <option value="0.5">50%</option><option value="0.6">60%</option>
+            <option value="0.7">70%</option><option value="0.8">80%</option>
+            <option value="0.9">90%</option><option value="1">100%</option>
+          </select>
+        </div>
+        <div class="field">
+          <span>판정 오프셋 <b id="offsetVal"></b></span>
+          <input type="range" id="offset" min="-150" max="150" step="5">
+          <small>+ 값: 늦게 쳐도 정확하게 판정 (입력 지연 보정)</small>
+        </div>
+      </div>
+      <div>
+        <div class="field">
+          <span>건반 소리 (게임에서 재생)</span>
+          <select id="keySound">
+            <option value="auto">자동 (키보드·터치만)</option>
+            <option value="on">항상 켜기</option>
+            <option value="off">끄기</option>
+          </select>
+        </div>
+        <label class="check"><input type="checkbox" id="longNotes"> 롱노트 (긴 음은 누르고 있기)</label>
+        <label class="check"><input type="checkbox" id="showScore"> 악보 표시 (피아노)</label>
+        <div class="field">
+          <span>악보 투명도 <b id="scoreOpacityVal"></b></span>
+          <input type="range" id="scoreOpacity" min="0.2" max="1" step="0.05">
+        </div>
+        <label class="check"><input type="checkbox" id="noFail"> 실패 없음</label>
+        <label class="check"><input type="checkbox" id="autoplay"> 오토 플레이 (데모)</label>
+        <h3>입력 테스트</h3>
+        <div id="inputTest" class="input-test">건반을 눌러보세요</div>
+        <p class="help" id="keyHelp"></p>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ───────── 게임 ───────── -->
 <div id="game" class="screen hidden">
   <canvas id="cv"></canvas>
+  <button id="pauseBtn" class="pause-btn" aria-label="일시정지">⏸</button>
   <div id="pauseMenu" class="overlay hidden">
     <div class="card">
       <h2>일시정지</h2>

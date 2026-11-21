@@ -1,21 +1,64 @@
-// Menu / screens / settings glue.
+// Menu (instrument tabs → song → difficulty → start), settings popup, charts, game flow.
 (function () {
   const $ = (s) => document.querySelector(s);
-  const DEFAULTS = { mode: 'seven', speed: 3, rate: 1, offset: 0, keySound: 'auto', longNotes: true, noFail: true, autoplay: false,
-                     wait: false, showScore: true, scoreOpacity: 0.7 };
+  const SETTINGS_VERSION = 3;
+  const DEFAULTS = { instrument: 'piano', mode: 'piano', speed: 3, rate: 1, offset: 0, keySound: 'auto', longNotes: true,
+                     noFail: true, autoplay: false, wait: false, showScore: true, scoreOpacity: 0.7, difficulty: 'normal',
+                     hands: 'R',
+                     v: SETTINGS_VERSION };
+  const INSTRUMENTS = {
+    piano:  { icon: '🎹', name: '피아노' },
+    bass:   { icon: '🎸', name: '베이스' },
+    guitar: { icon: '⚡', name: '일렉기타' },
+    drum:   { icon: '🥁', name: '드럼' },
+  };
+  const DIFF_NAME = { easy: '이지', normal: '노말', hard: '하드' };
+  const DIFF_HELP = {
+    piano: {
+      easy: '화음은 한 음만, 빠른 음은 생략합니다 (생략된 음은 자동 반주).',
+      normal: '화음은 한 음만 칩니다 (나머지는 자동 반주).',
+      hard: '선택한 손의 모든 음을 칩니다.',
+    },
+    bass: {
+      easy: '베이스 4레인 · 큰 박자 위주로 칩니다.',
+      normal: '베이스 4레인 · 8분음표까지 칩니다.',
+      hard: '베이스 4레인 · 베이스 라인 전부를 칩니다.',
+    },
+    guitar: {
+      easy: '기타 5레인 · 멜로디의 큰 박자만 칩니다.',
+      normal: '기타 5레인 · 멜로디를 칩니다.',
+      hard: '기타 5레인 · 빠른 음까지 전부 칩니다.',
+    },
+    drum: {
+      easy: '킥 · 스네어 · 크래시만 칩니다.',
+      normal: '하이햇 8분음표 · 탐 · 라이드까지 칩니다.',
+      hard: '고스트 노트와 16분음표까지 전부 칩니다.',
+    },
+  };
   // GM program family -> synth instrument
-  const GM_INST = ['piano', 'pluck', 'organ', 'pluck', 'bass', 'strings', 'strings', 'brass',
+  const GM_INST = ['piano', 'pluck', 'organ', 'eguitar', 'bass', 'strings', 'strings', 'brass',
                    'brass', 'organ', 'lead', 'strings', 'lead', 'pluck', 'pluck', 'piano'];
-  const INST_NAME = { piano: '피아노', strings: '현악', bass: '베이스', organ: '오르간', pluck: '기타/플럭',
-                      brass: '브라스', lead: '신스 리드', drum: '드럼' };
-  const GM_FAMILY = ['피아노', '크로매틱 퍼커션', '오르간', '기타', '베이스', '현악기', '앙상블', '브라스',
-                     '리드', '관악기', '신스 리드', '신스 패드', '신스 효과', '민속 악기', '타악기', '효과음'];
 
+  const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
   let settings = { ...DEFAULTS };
-  try { Object.assign(settings, JSON.parse(localStorage.getItem('keyfall.settings') || '{}')); } catch {}
+  try {
+    const saved = JSON.parse(localStorage.getItem('keyfall.settings') || '{}');
+    if ((saved.v || 1) < 2) delete saved.mode;                                   // v2: piano became the default
+    if ((saved.v || 1) < 3 && saved.mode === 'drum') { saved.mode = 'piano'; saved.instrument = 'drum'; } // v3: drum is a tab
+    saved.v = SETTINGS_VERSION;
+    Object.assign(settings, saved);
+  } catch {}
+  if (!INSTRUMENTS[settings.instrument]) settings.instrument = 'piano';
+  if (settings.mode !== 'seven') settings.mode = 'piano';
   const save = () => { try { localStorage.setItem('keyfall.settings', JSON.stringify(settings)); } catch {} };
+  const inst = () => settings.instrument;
+  const gameMode = () => inst() === 'piano' ? settings.mode : inst();
 
   const songs = Songs.list.slice();
+  for (const s of songs) for (const p of s.parts) {
+    if (p.role === 'play') p.hand = 'R';
+    else if (p.name.startsWith('왼손')) p.hand = 'L';
+  }
   let selected = null;
   let lastChart = null;
   const game = new Game($('#cv'));
@@ -27,11 +70,17 @@
     Input.keyboard.enabled = id === '#game';
   }
 
-  // ── settings UI ──
+  // ── settings popup ──
+  const openSettings = () => $('#settingsModal').classList.remove('hidden');
+  const closeSettings = () => $('#settingsModal').classList.add('hidden');
+  $('#settingsBtn').onclick = openSettings;
+  $('#closeSettings').onclick = closeSettings;
+  $('#settingsModal').onclick = (e) => { if (e.target.id === 'settingsModal') closeSettings(); };
+
   function bindSettings() {
     document.querySelectorAll('input[name=mode]').forEach(r => {
       r.checked = r.value === settings.mode;
-      r.onchange = () => { settings.mode = r.value; save(); updateHelp(); if (selected) renderDetail(); };
+      r.onchange = () => { settings.mode = r.value; save(); updateHelp(); };
     });
     const speed = $('#speed');
     speed.value = settings.speed;
@@ -56,6 +105,12 @@
     const sov = () => { $('#scoreOpacityVal').textContent = Math.round(settings.scoreOpacity * 100) + '%'; };
     so.oninput = () => { settings.scoreOpacity = parseFloat(so.value); sov(); save(); };
     sov();
+    document.querySelectorAll('input[name=diff]').forEach(r => {
+      r.onchange = () => { settings.difficulty = r.value; save(); if (selected) renderDetail(); };
+    });
+    document.querySelectorAll('input[name=hands]').forEach(r => {
+      r.onchange = () => { settings.hands = r.value; save(); if (selected) renderDetail(); };
+    });
     for (const k of ['longNotes', 'noFail', 'autoplay', 'showScore']) {
       $('#' + k).checked = !!settings[k];
       $('#' + k).onchange = (e) => { settings[k] = e.target.checked; save(); };
@@ -67,102 +122,187 @@
     $('#playHelp').textContent = settings.wait
       ? '노트를 칠 때까지 곡이 멈춰서 기다립니다. 천천히 익힐 때 사용하세요.'
       : '곡이 멈추지 않고 진행되며, 놓친 노트는 MISS가 됩니다.';
-    $('#keyHelp').innerHTML = settings.mode === 'seven'
-      ? '<b>7키 모드</b>: 옥타브와 상관없이 도·레·미·파·솔·라·시 중 맞는 음을 치면 됩니다. 검은건반(#)은 아래 흰건반 레인으로 처리됩니다.<br>' +
-        'MIDI가 없으면 키보드 <b>S D F Space J K L</b>'
-      : '<b>피아노 모드</b>: 88건반 위로 노트가 떨어집니다. 정확한 음을 쳐야 합니다.<br>' +
-        'MIDI가 없으면 키보드: 흰건반 <b>1~0, q~m</b> (C2~C7), 검은건반 <b>Shift</b>+키, ' +
-        '양 끝 확장 건반(점 표시)은 <b>Ctrl</b> 또는 <b>Alt</b>+키';
+    $('#keyHelp').innerHTML =
+      '<b>🎹 피아노</b>: MIDI 피아노 · 키보드 흰건반 <b>1~0, q~m</b>, 검은건반 <b>Shift</b>+키, 양 끝 건반 <b>Ctrl/Alt</b>+키 ' +
+      '(7키 보기: <b>S D F Space J K L</b>)<br>' +
+      '<b>🎸 베이스</b>: 4레인 <b>D F J K</b> · <b>⚡ 일렉기타</b>: 5레인 <b>D F Space J K</b> — 친 음이 악기 소리로 납니다. ' +
+      'MIDI 건반은 한 옥타브를 레인 수로 나눠 씁니다.<br>' +
+      '<b>🥁 드럼</b>: 전자드럼(MIDI) 연결 · 피아노 건반은 도~시 · 키보드 <b>S D F Space J K L</b> (Space = 킥)<br>' +
+      '휴대폰은 화면을 터치해서 연주합니다.';
   }
 
   // ── MIDI status ──
   Input.onStatus((st) => {
     const el = $('#midiStatus');
     el.classList.remove('ok', 'warn');
-    if (!st.supported) { el.textContent = '이 브라우저는 Web MIDI 미지원 (Chrome/Edge 권장)'; el.classList.add('warn'); }
-    else if (st.error) { el.textContent = 'MIDI 접근 거부됨: ' + st.error; el.classList.add('warn'); }
-    else if (!st.devices.length) { el.textContent = 'MIDI 장치 없음 — 피아노를 연결하세요 (키보드로도 가능)'; el.classList.add('warn'); }
+    if (!st.supported) { el.textContent = 'Web MIDI 미지원 (Chrome/Edge 권장)'; el.classList.add('warn'); }
+    else if (st.error) { el.textContent = 'MIDI 접근 거부됨'; el.classList.add('warn'); }
+    else if (!st.devices.length) { el.textContent = 'MIDI 장치 없음 (키보드·터치로도 가능)'; el.classList.add('warn'); }
     else { el.textContent = '🎹 ' + st.devices.join(', '); el.classList.add('ok'); }
   });
   Input.initMIDI();
 
-  // ── song list ──
+  // ── tabs / song list / detail ──
   function fmtTime(s) { s = Math.round(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
   function songLength(s) {
     let e = 0;
     for (const p of s.parts) for (const n of p.notes) e = Math.max(e, n.time + n.dur);
     return e;
   }
+  // songs shown in the current tab: instrument-exclusive songs only in their own tab (listed first)
+  function visibleSongs() {
+    const list = songs.filter(s => !s.exclusive || s.exclusive === inst());
+    return list.filter(s => s.exclusive).concat(list.filter(s => !s.exclusive));
+  }
+
+  function renderTabs() {
+    document.querySelectorAll('#tabs .tab').forEach(t => {
+      t.classList.toggle('on', t.dataset.inst === inst());
+      t.onclick = () => selectTab(t.dataset.inst);
+    });
+  }
+  function selectTab(name) {
+    settings.instrument = name;
+    save();
+    const vis = visibleSongs();
+    if (!vis.includes(selected)) selected = vis[0] || null;
+    renderTabs();
+    renderSongs();
+    renderDetail();
+  }
 
   function renderSongs() {
     const ul = $('#songList');
     ul.innerHTML = '';
-    for (const s of songs) {
+    for (const s of visibleSongs()) {
       const li = document.createElement('li');
       if (s === selected) li.classList.add('sel');
       li.innerHTML = `<b></b><small></small>`;
       li.querySelector('b').textContent = s.title;
+      if (s.exclusive) li.querySelector('b').insertAdjacentHTML('beforeend', '<span class="badge">전용곡</span>');
       li.querySelector('small').textContent = `${s.artist} · ${fmtTime(songLength(s))}`;
       li.onclick = () => { selected = s; renderSongs(); renderDetail(); };
       ul.appendChild(li);
     }
   }
 
-  function partInfo(p) {
-    if (!p.notes.length) return '노트 없음';
-    let lo = 127, hi = 0;
-    for (const n of p.notes) { lo = Math.min(lo, n.midi); hi = Math.max(hi, n.midi); }
-    const inst = p.program != null && !p.isDrum ? GM_FAMILY[p.program >> 3] : INST_NAME[p.inst] || '';
-    return [inst, `${p.notes.length}노트`, p.isDrum ? '' : `${Songs.midiName(lo)}–${Songs.midiName(hi)}`].filter(Boolean).join(' · ');
-  }
-
   function renderDetail() {
     const s = selected;
-    $('#songTitle').textContent = s.title;
-    const play = s.parts.filter(p => p.role === 'play');
-    const nPlay = play.reduce((a, p) => a + p.notes.length, 0);
-    $('#songMeta').textContent = `${s.artist} · ${fmtTime(songLength(s) / settings.rate)} · 연주할 노트 ${nPlay}개`;
-    const list = $('#partList');
-    list.innerHTML = '';
-    for (const p of s.parts) {
-      const row = document.createElement('div');
-      row.className = 'part';
-      row.innerHTML = `<div class="info"><b></b><small></small></div>
-        <div class="roles">
-          <button data-role="play">연주</button><button data-role="accomp">반주</button><button data-role="off">끔</button>
-        </div>`;
-      row.querySelector('b').textContent = p.name;
-      row.querySelector('small').textContent = partInfo(p);
-      row.querySelectorAll('.roles button').forEach(b => {
-        b.classList.toggle('on', b.dataset.role === p.role);
-        b.onclick = () => { p.role = b.dataset.role; renderDetail(); };
-      });
-      list.appendChild(row);
+    const I = INSTRUMENTS[inst()];
+    $('#instLabel').textContent = `${I.icon} ${I.name}로 연주`;
+    document.querySelectorAll('input[name=diff]').forEach(r => { r.checked = r.value === settings.difficulty; });
+    $('#diffHelp').textContent = DIFF_HELP[inst()][settings.difficulty];
+    if (!s) {
+      $('#songTitle').textContent = '곡을 선택하세요';
+      $('#songMeta').textContent = $('#songCredit').textContent = '';
+      $('#drumStyleRow').innerHTML = '';
+      $('#startBtn').disabled = true;
+      return;
     }
+    $('#songTitle').textContent = s.title;
+    // part setting (piano): right / left / both hands
+    const hp = $('#handPick');
+    hp.classList.toggle('hidden', inst() !== 'piano');
+    const hasL = hasLeftHand(s);
+    const hands = handsFor(s);
+    document.querySelectorAll('input[name=hands]').forEach(r => {
+      r.checked = r.value === hands;
+      r.disabled = !hasL && r.value !== 'R';
+      r.parentElement.classList.toggle('disabled', r.disabled);
+    });
+    $('#handHelp').textContent = hasL
+      ? ({ R: '오른손 파트를 칩니다. 왼손은 자동 반주로 나옵니다.', L: '왼손 파트를 칩니다. 오른손은 자동 반주로 나옵니다.',
+           both: '양손 파트를 모두 칩니다.' })[hands]
+      : '이 곡은 멜로디(오른손) 파트만 있어요.';
+    const nPlay = buildChart(s).play.length;
+    $('#songMeta').textContent = `${s.artist} · ${fmtTime(songLength(s) / settings.rate)} · ${DIFF_NAME[settings.difficulty]} 노트 ${nPlay}개`;
+    $('#songCredit').textContent = s.credit || '';
+
+    // drum style picker (regenerates the auto drum part)
+    const dr = $('#drumStyleRow');
+    dr.innerHTML = '';
+    const auto = s.parts.find(p => p.autoDrum);
+    if (auto) {
+      const row = document.createElement('div');
+      row.className = 'part drum-style';
+      row.innerHTML = `<div class="info"><b>🥁 드럼 스타일</b><small>곡 분위기를 바꿔보세요</small></div><select></select>`;
+      const sel = row.querySelector('select');
+      for (const [k, name] of Object.entries(Songs.DRUM_STYLES)) sel.add(new Option(name, k, false, k === s.drumStyle));
+      sel.onchange = () => {
+        s.drumStyle = sel.value;
+        auto.notes = Songs.makeDrums(s.bars, s.finalAt, s.beatSec, s.drumStyle, s.barBeats);
+        if (auto.role === 'off') auto.role = 'accomp';
+        renderDetail();
+      };
+      dr.appendChild(row);
+    }
+
     $('#startBtn').disabled = nPlay === 0;
   }
 
-  // ── MIDI file import ──
+  // ── MIDI → song ──
+  const RIGHT = /right|upper|^up$|\brh\b|treble|오른/i, LEFT = /left|lower|^down$|\blh\b|bass|왼/i;
+
+  // Tag piano parts with hands: by track name, by pitch (two piano tracks), or by splitting one track at middle C.
+  function assignHands(parts) {
+    const piano = parts.filter(p => !p.isDrum && p.inst === 'piano');
+    const label = () => {
+      for (const p of piano) if (p.hand && !/[가-힣]/.test(p.name)) p.name = (p.hand === 'R' ? '오른손' : '왼손') + ` (${p.name})`;
+      return parts;
+    };
+    for (const p of piano) p.hand = RIGHT.test(p.name) ? 'R' : LEFT.test(p.name) ? 'L' : null;
+    if (piano.some(p => p.hand)) return label();
+    const avg = (p) => p.notes.reduce((a, n) => a + n.midi, 0) / p.notes.length;
+    if (piano.length === 2) {
+      const [hi, lo] = piano.slice().sort((x, y) => avg(y) - avg(x));
+      hi.hand = 'R'; lo.hand = 'L';
+      return label();
+    }
+    if (piano.length === 1) {
+      const p = piano[0];
+      const low = p.notes.filter(n => n.midi < 60), high = p.notes.filter(n => n.midi >= 60);
+      if (low.length > p.notes.length * 0.15 && high.length > p.notes.length * 0.15) {
+        const i = parts.indexOf(p);
+        parts.splice(i, 1,
+          { ...p, name: '오른손 (자동 분리)', hand: 'R', notes: high },
+          { ...p, name: '왼손 (자동 분리)', hand: 'L', notes: low });
+      }
+    }
+    return parts;
+  }
+
+  function songFromMidi(buf, meta) {
+    const mf = MidiFile.parse(buf);
+    const k = meta.tempoScale || 1;                      // fixes files without a tempo marking
+    let parts = mf.parts.filter(p => p.notes.length);
+    if (!parts.length) throw new Error('노트가 없습니다.');
+    for (const p of parts) {
+      p.inst = p.isDrum ? 'drum' : GM_INST[(p.program ?? 0) >> 3];
+      if (k !== 1) p.notes = p.notes.map(n => ({ ...n, time: n.time * k, dur: n.dur * k }));
+    }
+    parts = assignHands(parts);
+    // roles: right hand (or the busiest melodic part) is played, everything else accompanies
+    let lead = parts.find(p => p.hand === 'R');
+    if (!lead) {
+      for (const p of parts) if (!p.isDrum && (!lead || p.notes.length > lead.notes.length)) lead = p;
+      if (lead) lead.hand = 'R';
+    }
+    for (const p of parts) p.role = p === lead ? 'play' : 'accomp';
+    // drums are always in: generated groove unless the file brings its own drums
+    const bars = mf.bars.map(b => b * k);
+    const hasDrums = parts.some(p => p.isDrum);
+    let finalAt = 0;
+    for (const p of parts) if (!p.isDrum) for (const n of p.notes) finalAt = Math.max(finalAt, n.time);
+    const style = meta.drumStyle || 'disco';
+    parts.push({ name: '자동 드럼', role: hasDrums ? 'off' : 'accomp', inst: 'drum', isDrum: true, autoDrum: true,
+                 program: null, notes: Songs.makeDrums(bars, finalAt, mf.beatSec * k, style, mf.barBeats) });
+    return { id: meta.id || 'file-' + Date.now(), title: meta.title, artist: meta.artist || 'MIDI 파일', credit: meta.credit,
+             parts, bars, barBeats: mf.barBeats, beatSec: mf.beatSec * k, finalAt, drumStyle: style };
+  }
+
   async function importFile(file) {
     try {
-      const mf = MidiFile.parse(await file.arrayBuffer());
-      const parts = mf.parts.filter(p => p.notes.length);
-      if (!parts.length) throw new Error('노트가 없습니다.');
-      // default: the busiest non-drum part is played, others accompany, drums off
-      let best = null;
-      for (const p of parts) if (!p.isDrum && (!best || p.notes.length > best.notes.length)) best = p;
-      for (const p of parts) {
-        p.role = p === best ? 'play' : 'accomp';
-        p.inst = p.isDrum ? 'drum' : GM_INST[(p.program ?? 0) >> 3];
-      }
-      // always offer a disco groove; on by default when the file has no drums of its own
-      const hasDrums = parts.some(p => p.isDrum);
-      let finalAt = 0;
-      for (const p of parts) if (!p.isDrum) for (const n of p.notes) finalAt = Math.max(finalAt, n.time);
-      parts.push({ name: '디스코 드럼 (자동)', role: hasDrums ? 'off' : 'accomp', inst: 'drum', isDrum: true,
-                   program: null, notes: Songs.discoDrums(mf.bars, finalAt, mf.beatSec) });
-      const song = { id: 'file-' + Date.now(), title: file.name.replace(/\.midi?$/i, ''), artist: 'MIDI 파일', parts,
-                     bars: mf.bars, beatSec: mf.beatSec };
+      const song = songFromMidi(await file.arrayBuffer(), { title: file.name.replace(/\.midi?$/i, '') });
       songs.push(song);
       selected = song;
       renderSongs();
@@ -171,6 +311,35 @@
       alert('MIDI 파일을 불러오지 못했습니다.\n' + err.message);
     }
   }
+
+  // songs/songs.json lists extra MIDI songs shipped with the site
+  function xhr(url, type) {
+    return new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      x.open('GET', url);
+      x.responseType = type;
+      x.onload = () => (x.status === 200 || (x.status === 0 && x.response)) ? resolve(x.response) : reject(new Error('HTTP ' + x.status));
+      x.onerror = () => reject(new Error('network'));
+      x.send();
+    });
+  }
+  async function loadLibrary() {
+    let list;
+    try {
+      list = await xhr('songs/songs.json', 'json');
+      if (!Array.isArray(list)) throw new Error('bad list');
+    } catch {
+      $('#libNote').textContent = '클래식 곡은 웹 서버에서 열어야 보입니다 (GitHub Pages 또는 npx serve).';
+      return;
+    }
+    for (const meta of list) {
+      try {
+        songs.push(songFromMidi(await xhr('songs/' + meta.file, 'arraybuffer'), meta));
+        renderSongs();
+      } catch (e) { console.warn('곡을 불러오지 못했습니다:', meta.file, e); }
+    }
+  }
+
   $('#midiFile').onchange = (e) => { if (e.target.files[0]) importFile(e.target.files[0]); e.target.value = ''; };
   const dz = $('#dropZone');
   dz.ondragover = (e) => { e.preventDefault(); dz.classList.add('over'); };
@@ -182,28 +351,143 @@
   addEventListener('dragover', (e) => e.preventDefault());
   addEventListener('drop', (e) => e.preventDefault());
 
-  // ── game flow ──
-  function buildChart(s) {
-    const play = [], accomp = [], score = [];
-    for (const p of s.parts) {
-      if (p.role === 'off') continue;
-      const isPlay = p.role === 'play';
-      if (isPlay) play.push(...p.notes);
-      else accomp.push(...p.notes.map(n => ({ ...n, inst: p.inst || 'piano' })));
-      // sheet music shows the parts you play plus piano accompaniment
-      if (!p.isDrum && (isPlay || (p.inst || 'piano') === 'piano')) {
-        for (const n of p.notes) score.push({ time: n.time, dur: n.dur, midi: n.midi, play: isPlay });
-      }
+  // ── charts ──
+  // Keep one note per onset (highest for melody, lowest for bass) and drop notes closer than minGap.
+  function pickNotes(notes, minGap, lowest = false) {
+    const sorted = notes.slice().sort((a, b) => a.time - b.time || (lowest ? a.midi - b.midi : b.midi - a.midi));
+    const kept = new Set();
+    let last = -Infinity, clusterAt = -Infinity;
+    for (const n of sorted) {
+      if (n.time - clusterAt < 0.03) continue;          // same onset: the first in sort order was considered
+      clusterAt = n.time;
+      if (n.time - last >= minGap) { kept.add(n); last = n.time; }
     }
-    return { title: s.title, play, accomp, score, bars: s.bars, beatSec: s.beatSec };
+    return kept;
   }
 
+  const hasLeftHand = (s) => s.parts.some(p => p.hand === 'L' && p.role !== 'off' && p.notes.length);
+  const handsFor = (s) => hasLeftHand(s) ? settings.hands : 'R';
+
+  // piano: play the chosen hand(s); easy / normal keep one note per chord (top for right hand, bottom for left)
+  function buildPianoChart(s, diff) {
+    const hands = handsFor(s);
+    const accomp = [], score = [];
+    const right = [], left = [];
+    const pianoParts = [];
+    for (const p of s.parts) {
+      if (p.role === 'off') continue;
+      const instr = p.inst || 'piano';
+      const isPlay = !p.isDrum && ((p.hand === 'R' && hands !== 'L') || (p.hand === 'L' && hands !== 'R'));
+      if (isPlay) (p.hand === 'L' ? left : right).push(...p.notes);
+      else accomp.push(...p.notes.map(n => ({ ...n, inst: instr })));
+      if (!p.isDrum && (isPlay || instr === 'piano')) pianoParts.push(p);
+    }
+    let play = right.concat(left);
+    let kept = new Set(play);
+    if (diff !== 'hard') {
+      const gap = (diff === 'easy' ? 0.35 : 0.12) * settings.rate;
+      kept = new Set([...pickNotes(right, gap), ...pickNotes(left, gap, true)]);
+      for (const n of play) if (!kept.has(n)) accomp.push({ ...n, inst: 'piano' });
+      play = play.filter(n => kept.has(n));
+    }
+    for (const p of pianoParts) for (const n of p.notes) score.push({ time: n.time, dur: n.dur, midi: n.midi, play: kept.has(n) });
+    return { play, accomp, score };
+  }
+
+  // drum: the drum part becomes the chart; every other part is backing
+  function buildDrumChart(s, diff) {
+    const MAP = Game.GM_TO_LANE;
+    let drums = s.parts.filter(p => p.isDrum && p.role !== 'off');
+    if (!drums.length) drums = s.parts.filter(p => p.autoDrum);
+    const accomp = [], cand = [];
+    for (const p of s.parts) {
+      if (p.role === 'off' && !drums.includes(p)) continue;
+      if (drums.includes(p)) {
+        for (const n of p.notes) (MAP[n.midi] !== undefined ? cand : accomp).push({ ...n, inst: 'drum' });
+      } else accomp.push(...p.notes.map(n => ({ ...n, inst: p.inst || 'piano' })));
+    }
+    // easy = kick/snare/crash, normal = + 8th-note hats, toms, ride, hard = everything
+    const maxLvl = { easy: 1, normal: 2, hard: 3 }[diff];
+    const minGap = { easy: 0.22, normal: 0.11, hard: 0.05 }[diff] * settings.rate;
+    const coreLane = (m) => [0, 2, 3].includes(MAP[m]);
+    const lastByLane = {};
+    const play = [];
+    for (const n of cand.sort((a, b) => a.time - b.time)) {
+      const lvl = n.lvl ?? (n.vel < 0.4 ? 3 : coreLane(n.midi) ? 1 : 2);   // files without levels: guess
+      const lane = MAP[n.midi];
+      const ok = lvl <= maxLvl && n.time - (lastByLane[lane] ?? -1) >= minGap;
+      if (ok) { play.push(n); lastByLane[lane] = n.time; } else accomp.push(n);
+    }
+    return { play, accomp, score: [] };
+  }
+
+  // bass (4 lanes) / guitar (5 lanes): one note at a time; the lane follows the pitch contour
+  function buildFretChart(s, diff, which) {
+    const N = which === 'bass' ? 4 : 5;
+    const hitInst = which === 'bass' ? 'bass' : (s.tone || 'eguitar');
+    let srcParts = which === 'bass'
+      ? s.parts.filter(p => p.inst === 'bass' && !p.isDrum)
+      : s.parts.filter(p => p.role === 'play');
+    const accomp = [];
+    let src;
+    if (srcParts.length) {
+      src = srcParts.flatMap(p => p.notes);
+    } else {
+      // no bass track (e.g. a piano piece): lowest left-hand note of each beat, moved into bass range
+      const lh = s.parts.filter(p => p.hand === 'L' && p.role !== 'off');
+      const low = pickNotes(lh.flatMap(p => p.notes), 0.05, true);
+      src = [...low].map(n => {
+        let m = n.midi;
+        while (m > 52) m -= 12;
+        while (m < 28) m += 12;
+        return { ...n, midi: m };
+      });
+    }
+    for (const p of s.parts) {
+      if (p.role === 'off' || srcParts.includes(p)) continue;
+      accomp.push(...p.notes.map(n => ({ ...n, inst: p.inst || 'piano' })));
+    }
+    const kept = pickNotes(src, { easy: 0.3, normal: 0.15, hard: 0.07 }[diff] * settings.rate, which === 'bass');
+    const notes = src.filter(n => kept.has(n));
+    for (const n of src) if (!kept.has(n)) accomp.push({ ...n, inst: hitInst });
+
+    // lanes: rank pitches by how often they occur so the notes spread across all lanes
+    const count = new Map();
+    for (const n of notes) count.set(n.midi, (count.get(n.midi) || 0) + 1);
+    const uniq = [...count.keys()].sort((a, b) => a - b);
+    const laneOf = new Map();
+    if (uniq.length <= N * 2) {                         // few pitches: spread them evenly over the lanes
+      uniq.forEach((m, i) => laneOf.set(m, uniq.length === 1 ? Math.floor(N / 2) : Math.round(i * (N - 1) / (uniq.length - 1))));
+    } else {
+      let acc = 0;
+      for (const m of uniq) {
+        const c = count.get(m);
+        laneOf.set(m, Math.min(N - 1, Math.floor(((acc + c / 2) / notes.length) * N)));
+        acc += c;
+      }
+    }
+    const play = notes.map(n => ({ ...n, lane: laneOf.get(n.midi) }));
+    return { play, accomp, score: [], hitInst };
+  }
+
+  function buildChart(s) {
+    const diff = settings.difficulty || 'normal';
+    const which = inst();
+    const c = which === 'drum' ? buildDrumChart(s, diff)
+            : which === 'piano' ? buildPianoChart(s, diff)
+            : buildFretChart(s, diff, which);
+    return { title: s.title, diff: DIFF_NAME[diff], inst: which, bars: s.bars, beatSec: s.beatSec, ...c };
+  }
+
+  // ── game flow ──
   async function startGame(chart) {
     if (!chart || !chart.play.length) return;
     lastChart = chart;
     await Sound.ensure();
     show('#game');
-    game.setup(chart, { ...settings });
+    await goLandscape();
+    const mode = chart.inst === 'piano' ? settings.mode : chart.inst;
+    game.setup(chart, { ...settings, mode, compact: isTouch || innerWidth < 900, hitInst: chart.hitInst });
     game.start();
   }
 
@@ -211,7 +495,8 @@
 
   game.onFinish = (r) => {
     show('#result');
-    $('#resTitle').textContent = r.title + (r.wait ? ' · 연습 모드' : '') + (r.autoplay ? ' (AUTO)' : '');
+    const I = INSTRUMENTS[lastChart.inst];
+    $('#resTitle').textContent = `${I.icon} ${r.title} · ${lastChart.diff}` + (r.wait ? ' · 연습 모드' : '') + (r.autoplay ? ' (AUTO)' : '');
     const rk = $('#resRank');
     rk.textContent = r.rank;
     rk.className = 'rank ' + r.rank;
@@ -228,7 +513,7 @@
                                r.fast > r.slow * 2 ? ' — 전체적으로 빨라요. 판정 오프셋을 −로 내려보세요.' : '') : '');
   };
 
-  const toMenu = () => { game.stop(); show('#menu'); };
+  const toMenu = () => { game.stop(); show('#menu'); leaveLandscape(); };
   const restart = () => { game.stop(); startGame(lastChart); };
   const togglePause = () => {
     if (game.paused) { $('#pauseMenu').classList.add('hidden'); game.resume(); }
@@ -239,12 +524,15 @@
   $('#quitBtn').onclick = toMenu;
   $('#retryBtn').onclick = restart;
   $('#menuBtn').onclick = toMenu;
+  $('#pauseBtn').onclick = togglePause;
 
   addEventListener('keydown', (e) => {
     if (e.repeat) return;
+    const settingsOpen = !$('#settingsModal').classList.contains('hidden');
     const inMenu = !$('#menu').classList.contains('hidden');
     const inGame = !$('#game').classList.contains('hidden');
     const inResult = !$('#result').classList.contains('hidden');
+    if (settingsOpen) { if (e.key === 'Escape') closeSettings(); return; }
     if (inMenu && e.key === 'Enter' && selected && !$('#startBtn').disabled) { e.preventDefault(); $('#startBtn').click(); }
     else if (inGame && e.key === 'Escape') { e.preventDefault(); togglePause(); }
     else if (inGame && game.paused && e.code === 'KeyR') restart();
@@ -255,25 +543,65 @@
 
   // ── note input routing ──
   const recent = [];
-  Input.on((type, midi, vel, ts, src) => {
+  Input.on((type, midi, vel, ts, src, ch) => {
     if (game.running) {
-      if (type === 'on') game.noteOn(midi, vel, ts, src);
-      else game.noteOff(midi, ts, src);
+      if (type === 'on') game.noteOn(midi, vel, ts, src, ch);
+      else game.noteOff(midi, ts, src, ch);
       return;
     }
     if (type !== 'on') return;
-    recent.push(`${Songs.midiName(midi)}`);
+    recent.push(ch === 9 ? `드럼 ${midi}` : Songs.midiName(midi));
     if (recent.length > 10) recent.shift();
     $('#inputTest').innerHTML = recent.map(n => `<span class="n">${n}</span>`).join('') +
-      `<br><small>${src === 'midi' ? 'MIDI' : '키보드'} · 세기 ${Math.round(vel * 127)}</small>`;
+      `<br><small>${src === 'midi' ? `MIDI (채널 ${(ch ?? 0) + 1})` : '키보드'} · 세기 ${Math.round(vel * 127)}</small>`;
   });
+
+  // ── phones: landscape + touch ──
+  function applyOrientation() {
+    const rot = isTouch && !$('#game').classList.contains('hidden') && innerHeight > innerWidth;
+    $('#game').classList.toggle('rot', rot);
+    game.rot = rot;
+    game.resize();
+  }
+  async function goLandscape() {
+    if (isTouch) {
+      try { if (!document.fullscreenElement) await document.documentElement.requestFullscreen({ navigationUI: 'hide' }); } catch {}
+      try { await screen.orientation.lock('landscape'); } catch {}  // unsupported on iPhone: we rotate with CSS instead
+    }
+    applyOrientation();
+  }
+  function leaveLandscape() {
+    if (isTouch) {
+      try { screen.orientation.unlock(); } catch {}
+      try { if (document.fullscreenElement) document.exitFullscreen(); } catch {}
+    }
+    applyOrientation();
+  }
+  addEventListener('resize', applyOrientation);
+  addEventListener('orientationchange', () => setTimeout(applyOrientation, 200));
+
+  const touches = new Map(); // touch id -> { midi, ch }
+  function touchPoint(t) {
+    // when the game is rotated 90° clockwise, screen (x, y) maps back to game (y, screenWidth - x)
+    return game.rot ? [t.clientY, innerWidth - t.clientX] : [t.clientX, t.clientY];
+  }
+  function onTouch(e) {
+    if (!game.running || game.paused) return;
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      const prev = touches.get(t.identifier);
+      const hit = e.type === 'touchend' || e.type === 'touchcancel' ? null : game.hitTest(...touchPoint(t));
+      if (prev && (!hit || hit.midi !== prev.midi)) { game.noteOff(prev.midi, performance.now(), 'touch', prev.ch); touches.delete(t.identifier); }
+      if (hit && (!prev || hit.midi !== prev.midi)) { game.noteOn(hit.midi, 0.8, performance.now(), 'touch', hit.ch); touches.set(t.identifier, hit); }
+    }
+  }
+  for (const ev of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) $('#cv').addEventListener(ev, onTouch, { passive: false });
 
   // warm up audio on first interaction (browsers require a user gesture)
   addEventListener('pointerdown', () => Sound.ensure(), { once: true });
 
   bindSettings();
-  renderSongs();
-  selected = songs[1];
-  renderSongs();
-  renderDetail();
+  selected = songs.find(s => s.id === 'twinkle') || songs[0];
+  selectTab(settings.instrument);
+  loadLibrary();
 })();

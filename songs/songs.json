@@ -1,0 +1,27 @@
+[
+  {
+    "id": "moonlight1",
+    "title": "월광 소나타 1악장",
+    "artist": "베토벤",
+    "file": "beethoven-moonlight-1.mid",
+    "drumStyle": "lofi",
+    "credit": "MIDI: Mutopia Project (Stewart Holmes) · CC BY-SA 2.5 · mutopiaproject.org/cgibin/piece-info.cgi?id=276"
+  },
+  {
+    "id": "moonlight3",
+    "title": "월광 소나타 3악장",
+    "artist": "베토벤",
+    "file": "beethoven-moonlight-3.mid",
+    "tempoScale": 0.42,
+    "drumStyle": "rock",
+    "credit": "MIDI: Mutopia Project (Stewart Holmes) · CC BY-SA 2.5 · 템포 조정 · mutopiaproject.org/cgibin/piece-info.cgi?id=276"
+  },
+  {
+    "id": "fantaisie",
+    "title": "즉흥환상곡",
+    "artist": "쇼팽",
+    "file": "chopin-fantaisie-impromptu.mid",
+    "drumStyle": "house",
+    "credit": "MIDI: Mutopia Project · Public Domain"
+  }
+]

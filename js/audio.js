@@ -48,11 +48,27 @@ window.Sound = (function () {
       oscs: [['sawtooth', 1, 0.7], ['sawtooth', 1, 0.4, 5]],
       cutoff: 900, filterEnv: [500, 2400, 0.06], peak: 0.09, attack: 0.04, release: 0.1,
     }),
+    // electric guitar: detuned saws through a distortion stage, then a "cabinet" low-pass
+    eguitar: (m, v) => ({
+      oscs: [['sawtooth', 1, 0.6], ['sawtooth', 1, 0.5, 9], ['square', 0.5, 0.25]],
+      drive: 30, cutoff: 3000, filterEnv: [5200, 2400, 0.18], peak: 0.1, attack: 0.004,
+      decay: 1.4, sustain: 0.55, release: 0.09,
+    }),
     lead: (m, v) => ({
       oscs: [['square', 1, 0.6], ['sawtooth', 1, 0.3, 6]],
       cutoff: 3000, peak: 0.06, attack: 0.01, release: 0.06,
     }),
   };
+
+  const curves = {};
+  function driveCurve(k) {
+    if (!curves[k]) {
+      const c = new Float32Array(1024);
+      for (let i = 0; i < c.length; i++) { const x = i / 511.5 - 1; c[i] = (1 + k) * x / (1 + k * Math.abs(x)); }
+      curves[k] = c;
+    }
+    return curves[k];
+  }
 
   function voice(midi, when, vel, out, inst = 'piano') {
     const cfg = (INST[inst] || INST.piano)(midi, vel);
@@ -65,12 +81,20 @@ window.Sound = (function () {
       filt.frequency.setValueAtTime(cfg.filterEnv[0], when);
       filt.frequency.setTargetAtTime(cfg.filterEnv[1], when, cfg.filterEnv[2]);
     }
+    let input = filt;
+    if (cfg.drive) {
+      const ws = ctx.createWaveShaper();
+      ws.curve = driveCurve(cfg.drive);
+      ws.oversample = '2x';
+      ws.connect(filt);
+      input = ws;
+    }
     const oscs = cfg.oscs.map(([type, mult, gain, det]) => {
       const o = ctx.createOscillator();
       o.type = type; o.frequency.value = f * mult;
       if (det) o.detune.value = det;
       const og = ctx.createGain(); og.gain.value = gain;
-      o.connect(og).connect(filt);
+      o.connect(og).connect(input);
       o.start(when);
       return o;
     });
@@ -106,13 +130,15 @@ window.Sound = (function () {
     s.stop(when + dur);
     return s;
   }
-  function noiseHit(when, vel, out, hp, peak, tau) {
-    const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = hp;
+  // filtered noise burst; type = highpass | bandpass | lowpass
+  function noiseHit(when, vel, out, type, freq, peak, tau, q = 0.7) {
+    const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
     const g = ctx.createGain();
     g.gain.setValueAtTime(peak * vel, when);
     g.gain.setTargetAtTime(0, when, tau);
     noise(when, tau * 6 + 0.05).connect(f).connect(g).connect(out);
   }
+  // pitched one-shot with pitch sweep f0 -> f1
   function toneHit(when, vel, out, type, f0, f1, sweep, peak, tau) {
     const o = ctx.createOscillator(); o.type = type;
     o.frequency.setValueAtTime(f0, when);
@@ -123,36 +149,88 @@ window.Sound = (function () {
     o.connect(g).connect(out);
     o.start(when); o.stop(when + tau * 6 + 0.05);
   }
+  // metallic cymbal tone: six detuned square waves (classic drum-machine recipe)
+  const METAL = [205.3, 304.4, 369.6, 522.7, 540, 800];
+  function metal(when, vel, out, hp, peak, tau, center = 10000) {
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = center; bp.Q.value = 0.6;
+    const h = ctx.createBiquadFilter(); h.type = 'highpass'; h.frequency.value = hp;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(peak * vel, when);
+    g.gain.setTargetAtTime(0, when, tau);
+    bp.connect(h).connect(g).connect(out);
+    for (const f of METAL) {
+      const o = ctx.createOscillator(); o.type = 'square'; o.frequency.value = f * 1.5;
+      o.connect(bp); o.start(when); o.stop(when + tau * 6 + 0.05);
+    }
+  }
+
   function drum(n, when, vel, out) {
     out = out || master;
-    const v = Math.max(0.2, vel);
-    if (n === 35 || n === 36) {                                                              // kick
-      toneHit(when, v, out, 'sine', 160, 45, 0.11, 1.0, 0.13);
-      noiseHit(when, v, out, 2500, 0.12, 0.006);                                             // beater click
-    }
-    else if (n === 39) {                                                                     // hand clap
-      for (const dt of [0, 0.011, 0.022]) {
-        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1300; f.Q.value = 0.8;
+    const v = Math.max(0.15, vel);
+    switch (n) {
+      case 35: case 36:                                                  // kick: sweep + sub + click
+        toneHit(when, v, out, 'sine', 170, 46, 0.1, 1.0, 0.14);
+        toneHit(when, v, out, 'triangle', 90, 40, 0.15, 0.35, 0.12);
+        noiseHit(when, v, out, 'highpass', 3000, 0.12, 0.005);
+        break;
+      case 38: case 40:                                                  // snare: body + rattle
+        toneHit(when, v, out, 'triangle', 240, 175, 0.04, 0.45, 0.05);
+        toneHit(when, v, out, 'sine', 330, 300, 0.03, 0.2, 0.03);
+        noiseHit(when, v, out, 'bandpass', 3200, 0.55, 0.075, 0.6);
+        noiseHit(when, v, out, 'highpass', 6000, 0.2, 0.05);
+        break;
+      case 37:                                                           // rim shot / side stick
+        toneHit(when, v, out, 'triangle', 1750, 1600, 0.01, 0.35, 0.015);
+        noiseHit(when, v, out, 'highpass', 3500, 0.15, 0.01);
+        break;
+      case 39:                                                           // hand clap: 3 quick bursts + tail
+        for (const dt of [0, 0.011, 0.022]) {
+          const last = dt === 0.022;
+          noiseHit(when + dt, v, out, 'bandpass', 1300, 0.55, last ? 0.07 : 0.006, 0.8);
+        }
+        break;
+      case 42: case 44: metal(when, v, out, 7000, 0.28, 0.025); break;   // closed hi-hat
+      case 46: metal(when, v, out, 7000, 0.24, 0.13); noiseHit(when, v, out, 'highpass', 9000, 0.05, 0.12); break; // open hat
+      case 49: case 52: case 55: case 57:                                // crash
+        metal(when, v, out, 4500, 0.22, 0.45, 8000);
+        noiseHit(when, v, out, 'highpass', 5000, 0.18, 0.5);
+        break;
+      case 51: case 59: metal(when, v, out, 5000, 0.1, 0.22, 7000); break; // ride
+      case 53: metal(when, v, out, 2500, 0.16, 0.3, 3000); break;          // ride bell
+      case 54:                                                           // tambourine: jingles
+        metal(when, v, out, 8000, 0.14, 0.06, 11000);
+        noiseHit(when, v, out, 'bandpass', 9000, 0.18, 0.05, 1.5);
+        noiseHit(when + 0.012, v, out, 'bandpass', 9500, 0.12, 0.04, 1.5);
+        break;
+      case 56: {                                                         // cowbell
+        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2600; bp.Q.value = 1;
         const g = ctx.createGain();
-        const t = when + dt, last = dt === 0.022;
-        g.gain.setValueAtTime(0.55 * v, t);
-        g.gain.setTargetAtTime(0, t, last ? 0.07 : 0.006);
-        noise(t, last ? 0.5 : 0.05).connect(f).connect(g).connect(out);
+        g.gain.setValueAtTime(0.35 * v, when); g.gain.setTargetAtTime(0, when, 0.06);
+        bp.connect(g).connect(out);
+        for (const f of [562, 845]) {
+          const o = ctx.createOscillator(); o.type = 'square'; o.frequency.value = f;
+          o.connect(bp); o.start(when); o.stop(when + 0.5);
+        }
+        break;
       }
+      case 60: toneHit(when, v, out, 'sine', 420, 390, 0.03, 0.5, 0.06); break;   // hi bongo
+      case 61: toneHit(when, v, out, 'sine', 300, 280, 0.03, 0.5, 0.08); break;   // low bongo
+      case 62: toneHit(when, v, out, 'sine', 340, 320, 0.02, 0.4, 0.03); break;   // muted conga
+      case 63: toneHit(when, v, out, 'sine', 360, 330, 0.04, 0.55, 0.12); break;  // open hi conga
+      case 64: toneHit(when, v, out, 'sine', 240, 215, 0.05, 0.6, 0.15); break;   // low conga
+      case 69: case 70: case 82:                                         // cabasa / maracas / shaker
+        noiseHit(when, v, out, 'bandpass', 6500, 0.22, 0.025, 1.2);
+        break;
+      case 75: case 76: case 77:                                         // claves / wood block
+        toneHit(when, v, out, 'sine', n === 75 ? 2500 : 1200, n === 75 ? 2450 : 1150, 0.01, 0.45, 0.025);
+        break;
+      default:
+        if (n >= 41 && n <= 50) {                                        // toms
+          const f = 75 + (n - 41) * 15;
+          toneHit(when, v, out, 'sine', f * 1.7, f, 0.2, 0.7, 0.16);
+          noiseHit(when, v, out, 'lowpass', 1500, 0.08, 0.03);
+        } else noiseHit(when, v, out, 'bandpass', 4000, 0.12, 0.03);    // misc percussion
     }
-    else if (n === 38 || n === 40 || n === 37) {                                             // snare
-      noiseHit(when, v, out, 1200, 0.45, 0.06);
-      toneHit(when, v, out, 'triangle', 220, 160, 0.05, 0.3, 0.05);
-    }
-    else if (n === 42 || n === 44) noiseHit(when, v, out, 7500, 0.16, 0.018);               // closed hi-hat
-    else if (n === 46) noiseHit(when, v, out, 7000, 0.14, 0.12);                            // open hi-hat
-    else if (n === 49 || n === 52 || n === 55 || n === 57) noiseHit(when, v, out, 4500, 0.2, 0.35); // crash
-    else if (n === 51 || n === 53 || n === 59) noiseHit(when, v, out, 6000, 0.08, 0.15);    // ride
-    else if (n >= 41 && n <= 50) {                                                           // toms
-      const f = 70 + (n - 41) * 14;
-      toneHit(when, v, out, 'sine', f * 1.6, f, 0.18, 0.6, 0.14);
-    }
-    else noiseHit(when, v, out, 3000, 0.08, 0.03);                                           // misc percussion
   }
 
   return {

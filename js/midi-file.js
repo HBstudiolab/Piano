@@ -121,12 +121,12 @@ window.MidiFile = (function () {
     // bar lines from time signatures (default 4/4)
     timesigs.sort((a, b) => a.tick - b.tick);
     if (!timesigs.length || timesigs[0].tick > 0) timesigs.unshift({ tick: 0, num: 4, den: 4 });
-    let bars = [];
+    let bars = [], barBeats = [];
     for (let i = 0; i < timesigs.length; i++) {
       const ts = timesigs[i];
       const endTick = i + 1 < timesigs.length ? timesigs[i + 1].tick : maxTick + 1;
       const step = Math.max(1, ts.num * div * 4 / ts.den);
-      for (let tk = ts.tick; tk < endTick; tk += step) bars.push(toSec(tk));
+      for (let tk = ts.tick; tk < endTick; tk += step) { bars.push(toSec(tk)); barBeats.push(ts.num * 4 / ts.den); }
     }
 
     // trim leading silence so the first note isn't far away
@@ -135,9 +135,11 @@ window.MidiFile = (function () {
     if (first > 1 && first !== Infinity) {
       const shift = first - 1;
       for (const pt of parts) for (const n of pt.notes) n.time -= shift;
-      bars = bars.map(b => b - shift).filter(b => b >= -0.01);
+      const keep = bars.map(b => b - shift >= -0.01);
+      bars = bars.map(b => b - shift).filter((_, i) => keep[i]);
+      barBeats = barBeats.filter((_, i) => keep[i]);
     }
-    return { parts, bars, beatSec: tempos[0].mpq / 1e6 };
+    return { parts, bars, barBeats, beatSec: tempos[0].mpq / 1e6 };
   }
 
   return { parse };
