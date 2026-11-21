@@ -151,6 +151,9 @@ window.Game = (function () {
         .sort((a, b) => a.time - b.time);
       this.accPtr = 0;
       this.wait = !!opts.wait;
+      this.backing = chart.backing || null;              // decoded AudioBuffer (song recorded without the played part)
+      this.backingOffset = chart.backingOffset || 0;     // seconds: where song time 0 is in the audio file
+      this.bsrc = null;
 
       // sheet music (piano parts only)
       this.sheet = opts.showScore && chart.score && chart.score.length
@@ -162,6 +165,7 @@ window.Game = (function () {
       for (const n of this.notes) end = Math.max(end, n.time + n.dur);
       for (const n of this.accomp) end = Math.max(end, n.time + n.dur);
       this.endTime = end + 1.5;
+      if (this.backing) this.endTime = Math.max(this.endTime, (this.backing.duration - this.backingOffset) / rate + 0.3);
 
       this.counts = { COOL: 0, GOOD: 0, BAD: 0, MISS: 0 };
       this.fast = 0; this.slow = 0;
@@ -348,6 +352,7 @@ window.Game = (function () {
       this.waiting = false;
       this.running = true;
       this.paused = false;
+      if (this.backing && !this.wait) this.startBacking(this.ctxStart + LEAD_IN, 0);
       const loop = () => {
         if (!this.running) return;
         if (!this.paused) {
@@ -379,7 +384,39 @@ window.Game = (function () {
       this.paused = false;
     }
 
+    // play the backing audio from song time t (seconds) at audio-clock time `when`
+    startBacking(when, t) {
+      const ctx = Sound.ctx, rate = this.opts.rate || 1;
+      const src = ctx.createBufferSource();
+      src.buffer = this.backing;
+      src.playbackRate.value = rate;
+      const g = ctx.createGain(); g.gain.value = 0.9;
+      src.connect(g).connect(this.bus);
+      let pos = t * rate + this.backingOffset;            // position in the file
+      if (pos < 0) { when += -pos / rate; pos = 0; }
+      src.start(when, pos);
+      this.bsrc = { src, when, pos };
+    }
+    stopBacking() {
+      if (!this.bsrc) return;
+      try { this.bsrc.src.stop(); } catch {}
+      this.bsrc = null;
+    }
+    // practice mode: the song clock stops at each note, so the audio follows it
+    syncBacking(t) {
+      const ctx = Sound.ctx, rate = this.opts.rate || 1;
+      const stalled = this.waiting && performance.now() - this.waitStart > 150;
+      if (stalled || t < 0) { this.stopBacking(); return; }
+      if (this.bsrc) {
+        const actual = this.bsrc.pos + Math.max(0, ctx.currentTime - this.bsrc.when) * rate;
+        if (Math.abs(actual - (t * rate + this.backingOffset)) < 0.12) return;
+        this.stopBacking();                               // drifted: restart in place
+      }
+      this.startBacking(ctx.currentTime, t);
+    }
+
     stop() {
+      this.stopBacking();
       this.running = false;
       this.paused = false;
       Sound.killBus(this.bus);
@@ -508,6 +545,7 @@ window.Game = (function () {
 
     // ── update ──
     update(t) {
+      if (this.backing && this.wait) this.syncBacking(t);
       if (this.wait) {
         // practice mode: accompaniment follows the (stoppable) clock, played as it is reached
         while (this.accPtr < this.accomp.length && this.accomp[this.accPtr].time <= t) {

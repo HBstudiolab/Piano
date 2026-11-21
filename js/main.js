@@ -275,7 +275,7 @@
     const dr = $('#drumStyleRow');
     dr.innerHTML = '';
     const auto = s.parts.find(p => p.autoDrum);
-    if (auto) {
+    if (auto && !s.backing) {
       const row = document.createElement('div');
       row.className = 'part drum-style';
       row.innerHTML = `<div class="info"><b>🥁 드럼 스타일</b><small>곡 분위기를 바꿔보세요</small></div><select></select>`;
@@ -325,7 +325,7 @@
   }
 
   function songFromMidi(buf, meta) {
-    const mf = MidiFile.parse(buf);
+    const mf = MidiFile.parse(buf, { trim: !meta.backing });   // keep timing exact when audio is synced to it
     const k = meta.tempoScale || 1;                      // fixes files without a tempo marking
     let parts = mf.parts.filter(p => p.notes.length);
     if (!parts.length) throw new Error('노트가 없습니다.');
@@ -347,10 +347,11 @@
     let finalAt = 0;
     for (const p of parts) if (!p.isDrum) for (const n of p.notes) finalAt = Math.max(finalAt, n.time);
     const style = meta.drumStyle || 'disco';
-    parts.push({ name: '자동 드럼', role: hasDrums ? 'off' : 'accomp', inst: 'drum', isDrum: true, autoDrum: true,
+    parts.push({ name: '자동 드럼', role: hasDrums || meta.drums === false ? 'off' : 'accomp', inst: 'drum', isDrum: true, autoDrum: true,
                  program: null, notes: Songs.makeDrums(bars, finalAt, mf.beatSec * k, style, mf.barBeats) });
     return { id: meta.id || 'file-' + Date.now(), title: meta.title, artist: meta.artist || 'MIDI 파일', credit: meta.credit,
-             parts, bars, barBeats: mf.barBeats, beatSec: mf.beatSec * k, finalAt, drumStyle: style };
+             parts, bars, barBeats: mf.barBeats, beatSec: mf.beatSec * k, finalAt, drumStyle: style,
+             exclusive: meta.exclusive, backing: meta.backing, backingOffset: meta.backingOffset || 0 };
   }
 
   async function importFile(file) {
@@ -529,7 +530,8 @@
     const c = which === 'drum' ? buildDrumChart(s, diff)
             : which === 'piano' ? buildPianoChart(s, diff)
             : buildFretChart(s, diff, which);
-    return { title: s.title, diff: DIFF_NAME[diff], inst: which, bars: s.bars, beatSec: s.beatSec, ...c };
+    return { title: s.title, diff: DIFF_NAME[diff], inst: which, bars: s.bars, beatSec: s.beatSec, song: s,
+             backingOffset: s.backingOffset, ...c };
   }
 
   // ── game flow ──
@@ -537,6 +539,18 @@
     if (!chart || !chart.play.length) return;
     lastChart = chart;
     await Sound.ensure();
+    const s = chart.song;
+    if (s && s.backing && !s.backingBuffer) {               // decode the backing audio once, on first play
+      const btn = $('#startBtn'), label = btn.innerHTML;
+      btn.disabled = true; btn.textContent = '배경음 불러오는 중…';
+      try {
+        s.backingBuffer = await Sound.ctx.decodeAudioData(await xhr('songs/' + s.backing, 'arraybuffer'));
+      } catch (e) {
+        alert('배경음을 불러오지 못했습니다. 웹 서버(GitHub Pages 또는 npx serve)에서 열어주세요.');
+      }
+      btn.innerHTML = label; btn.disabled = false;
+    }
+    chart.backing = s && s.backingBuffer || null;
     show('#game');
     await goLandscape();
     const mode = chart.inst === 'piano' ? settings.mode : chart.inst;

@@ -1,5 +1,15 @@
 [
   {
+    "id": "o2ma202",
+    "title": "Just Dance !!",
+    "artist": "커스텀 곡",
+    "file": "o2ma202_piano.mid",
+    "backing": "o2ma202_no_piano.mp3",
+    "exclusive": "piano",
+    "drums": false,
+    "credit": "커스텀 곡 · 배경음 포함"
+  },
+  {
     "id": "moonlight1",
     "title": "월광 소나타 1악장",
     "artist": "베토벤",

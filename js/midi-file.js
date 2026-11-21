@@ -1,6 +1,6 @@
 // Standard MIDI File (.mid) parser → parts (track + channel) with notes in seconds.
 window.MidiFile = (function () {
-  function parse(buffer) {
+  function parse(buffer, opts = {}) {
     const d = new DataView(buffer);
     let p = 0;
     const str = (n) => { let s = ''; for (let i = 0; i < n; i++) s += String.fromCharCode(d.getUint8(p++)); return s; };
@@ -132,7 +132,7 @@ window.MidiFile = (function () {
     // trim leading silence so the first note isn't far away
     let first = Infinity;
     for (const pt of parts) if (pt.notes.length) first = Math.min(first, pt.notes[0].time);
-    if (first > 1 && first !== Infinity) {
+    if (opts.trim !== false && first > 1 && first !== Infinity) {
       const shift = first - 1;
       for (const pt of parts) for (const n of pt.notes) n.time -= shift;
       const keep = bars.map(b => b - shift >= -0.01);
